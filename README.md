@@ -1,10 +1,8 @@
 # Quant
 
-> 当前开发分支：`feat/market-data`
-
 本地 A 股行情与量化研究平台。
 
-当前已完成两层核心能力：**market-data 行情层** + **stock-select 超短趋势选股层**。
+当前已完成三层核心能力：**market-data 行情层** + **stock-select 超短趋势选股层** + **策略复盘/回测层**。
 
 ## 目录
 
@@ -46,6 +44,9 @@ quant/
 - 超短趋势自动选股
 - Top10 候选 + 重点3只
 - 次日买入区、止损、止盈、移动止盈计划
+- 候选次日表现自动复盘
+- 胜率、盈亏比、最大回撤统计
+- 历史参数回测与止盈止损参数建议
 
 ## Docker Compose 启动
 
@@ -63,7 +64,8 @@ docker compose up -d --build
 DuckDB 数据保存在：
 
 ```text
-./data/market.duckdb
+./data/market.duckdb   # 行情数据
+./data/select.duckdb   # 选股、复盘、回测数据
 ```
 
 ## 本地开发
@@ -73,8 +75,11 @@ DuckDB 数据保存在：
 ```bash
 npm install
 
-# 后端
+# 行情服务
 npm run dev:market-data
+
+# 选股服务
+npm run dev:stock-select
 
 # 前端
 npm run dev:web
@@ -85,7 +90,9 @@ npm run dev:web
 1. 打开“数据同步”页面。
 2. 点击“同步今日市场”。
 3. 点击“同步板块”。
-4. 如需完整均线和趋势分析，再执行“初始化历史日 K”。
+4. 执行“初始化历史日 K”（建议至少120个交易日）。
+5. 打开“每日选股”，执行第一次选股。
+6. 下一个交易日数据同步后，“策略复盘”会自动产生真实候选表现。
 
 历史初始化默认 120 个交易日，属于一次性重任务。
 
@@ -115,6 +122,21 @@ GET /api/v1/select/ai
 
 ```text
 POST /api/v1/select/run
+```
+
+策略复盘：
+
+```text
+GET  /api/v1/select/review/summary
+GET  /api/v1/select/review/latest
+POST /api/v1/select/review/run
+```
+
+参数回测：
+
+```text
+POST /api/v1/select/backtest
+GET  /api/v1/select/backtests/latest
 ```
 
 详细设计见：
@@ -150,7 +172,7 @@ docs/architecture.md
 
 ```text
 16:10  同步当天全市场行情
-16:40  自动运行超短趋势选股
+16:40  先复盘历史候选，再自动运行超短趋势选股
 ```
 
 选股策略详细说明：
