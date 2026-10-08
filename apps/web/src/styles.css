@@ -712,3 +712,9 @@ input {
     grid-row: auto;
   }
 }
+
+
+.muted-text {
+  color: #94a3b8;
+  font-size: 12px;
+}
