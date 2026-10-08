@@ -11,10 +11,7 @@ import {
   getEnabledSources,
   recordSourceResult
 } from './source-manager.js';
-import {
-  getQuote,
-  mainIndexes
-} from './eastmoney.js';
+import { syncMarketIndexes } from './market.js';
 import type { SectorType } from './types.js';
 
 type JobStatus =
@@ -861,50 +858,8 @@ export async function syncHistory(
   return jobId;
 }
 
-export async function syncIndexes(
-  signal?: AbortSignal
-): Promise<void> {
-  const enabled = await getEnabledSources('sector').catch(() => [] as DataSourceId[]);
-  if (!enabled.includes('eastmoney_push2')) return;
-  for (const item of mainIndexes) {
-    if (signal) ensureNotAborted(signal);
-
-    try {
-      const quote = await getQuote(item.secid);
-      if (!quote) continue;
-
-      await run(
-        `INSERT OR REPLACE INTO market_index
-          (code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
-        [
-          item.code,
-          item.name,
-          quote.price,
-          quote.open,
-          quote.high,
-          quote.low,
-          quote.preClose,
-          quote.pct,
-          quote.change,
-          quote.volume,
-          quote.amount
-        ]
-      );
-    } catch (error) {
-      if (signal?.aborted) {
-        throw new DOMException(
-          '同步任务已取消',
-          'AbortError'
-        );
-      }
-
-      console.warn(
-        `同步指数 ${item.code} 失败，保留旧数据`,
-        error
-      );
-    }
-  }
+export async function syncIndexes(signal?: AbortSignal): Promise<void> {
+  await syncMarketIndexes(signal);
 }
 
 /**
