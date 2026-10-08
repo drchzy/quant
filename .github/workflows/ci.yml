@@ -81,7 +81,7 @@ jobs:
           exit 1
 
       - name: 检查 Docker Compose
-        run: docker compose --env-file runtime/config/.env.example config
+        run: docker compose --env-file web/config/.env.example config
 
       - name: 构建 market-data 镜像
         run: docker build -f services/market-data/Dockerfile -t quant-market-data:test .
