@@ -1114,6 +1114,7 @@ function TradingPage() {
                 <th>现价</th>
                 <th>买入区</th>
                 <th>成本</th>
+                <th>浮盈亏</th>
                 <th>止损</th>
                 <th>第一止盈</th>
                 <th>移动保护</th>
@@ -1147,6 +1148,11 @@ function TradingPage() {
                       : '-'}
                   </td>
                   <td>{row.entry_price ?? '-'}</td>
+                  <td>
+                    {row.unrealized_pct == null
+                      ? '-'
+                      : <Change value={row.unrealized_pct} />}
+                  </td>
                   <td>{row.plan?.stopPrice ?? '-'}</td>
                   <td>{row.plan?.takeProfit1 ?? '-'}</td>
                   <td>{row.trailing_stop == null ? '-' : Number(row.trailing_stop).toFixed(2)}</td>
@@ -1164,10 +1170,10 @@ function TradingPage() {
                     {row.entry_price && row.state !== 'closed' && (
                       <button
                         className="small-button danger-button"
-                        disabled={row.state === 't1_locked'}
+                        disabled={!row.can_sell}
                         onClick={() => void sell(row)}
                       >
-                        {row.state === 't1_locked' ? 'T+1锁定' : '确认卖出'}
+                        {row.can_sell ? '确认卖出' : 'T+1锁定'}
                       </button>
                     )}
                   </td>
