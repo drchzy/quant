@@ -254,7 +254,10 @@ export async function recordSourceResult(
   );
 }
 
-export async function testSource(source: DataSourceId) {
+export async function testSource(
+  source: DataSourceId,
+  capability?: DataCapability
+) {
   const definition = dataSourceDefinitions.find(
     (item) => item.id === source
   );
@@ -270,12 +273,24 @@ export async function testSource(source: DataSourceId) {
     const message = '未配置 TUSHARE_TOKEN';
     await recordSourceResult(source, {
       status: 'failed',
-      capability: definition.capabilities[0],
+      capability: targetCapability,
       message,
       tested: true
     });
     throw new Error(message);
   }
+
+  if (
+    capability &&
+    !definition.capabilities.includes(capability)
+  ) {
+    throw new Error(
+      definition.name + ' 不支持 ' + capability
+    );
+  }
+
+  const targetCapability =
+    capability || definition.capabilities[0];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
@@ -284,6 +299,7 @@ export async function testSource(source: DataSourceId) {
   try {
     const result = await testDataSource(
       source,
+      targetCapability,
       controller.signal
     );
     const latencyMs = Date.now() - started;
