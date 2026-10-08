@@ -151,6 +151,7 @@ function MarketPage() {
             <span>{item.name}</span>
             <b>{item.quote?.price ?? '-'}</b>
             <Change value={item.quote?.pct} />
+            <small>来源：{item.quote?.source || (item.quote ? 'DuckDB 本地' : '暂无数据')}</small>
           </div>
         ))}
       </div>
