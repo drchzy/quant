@@ -20,10 +20,17 @@ import {
 } from './eastmoney.js';
 import {
   getJobs,
+  stopAllSyncs,
   syncDailyMarket,
   syncHistory,
   syncSectors
 } from './sync.js';
+import {
+  getSourceSettings,
+  saveSourceSettings,
+  testSource
+} from './source-manager.js';
+import type { DataSourceId } from './providers.js';
 import type { SectorType } from './types.js';
 
 function toBoolean(value: unknown, defaultValue: boolean): boolean {
@@ -249,18 +256,98 @@ export async function registerRoutes(
     }
   });
 
-  app.post('/api/v1/sync/daily', async () => ({
-    jobId: await syncDailyMarket()
+  app.get('/api/v1/data-sources', async () => ({
+    data: await getSourceSettings()
   }));
 
-  app.post('/api/v1/sync/sectors', async () => ({
-    jobId: await syncSectors()
-  }));
+  app.put('/api/v1/data-sources', async (request, reply) => {
+    try {
+      const body = (request.body || {}) as {
+        sources?: Array<{
+          id: DataSourceId;
+          enabled: boolean;
+          priority: number;
+        }>;
+      };
+
+      if (!Array.isArray(body.sources)) {
+        return reply.code(400).send({
+          error: 'sources 必须是数组'
+        });
+      }
+
+      await saveSourceSettings(body.sources);
+
+      return {
+        success: true,
+        data: await getSourceSettings()
+      };
+    } catch (error) {
+      return reply.code(400).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      });
+    }
+  });
+
+  app.post('/api/v1/data-sources/test', async (request, reply) => {
+    try {
+      const body = (request.body || {}) as {
+        source?: DataSourceId;
+      };
+
+      if (!body.source) {
+        return reply.code(400).send({
+          error: 'source 不能为空'
+        });
+      }
+
+      return await testSource(body.source);
+    } catch (error) {
+      return reply.code(400).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      });
+    }
+  });
+
+  app.post('/api/v1/sync/daily', async (request) => {
+    const body = (request.body || {}) as {
+      sources?: string[];
+    };
+
+    return {
+      jobId: await syncDailyMarket(
+        Array.isArray(body.sources)
+          ? body.sources
+          : []
+      )
+    };
+  });
+
+  app.post('/api/v1/sync/sectors', async (request) => {
+    const body = (request.body || {}) as {
+      sources?: string[];
+    };
+
+    return {
+      jobId: await syncSectors(
+        Array.isArray(body.sources)
+          ? body.sources
+          : []
+      )
+    };
+  });
 
   app.post('/api/v1/sync/history', async (request) => {
     const body = (request.body || {}) as {
       days?: number;
       codes?: string[];
+      sources?: string[];
     };
 
     const days = Math.min(
@@ -273,8 +360,18 @@ export async function registerRoutes(
       : [];
 
     return {
-      jobId: await syncHistory(days, codes)
+      jobId: await syncHistory(
+        days,
+        codes,
+        Array.isArray(body.sources)
+          ? body.sources
+          : []
+      )
     };
+  });
+
+  app.post('/api/v1/sync/stop-all', async () => {
+    return stopAllSyncs();
   });
 
   app.get('/api/v1/sync/jobs', async (request) => {
