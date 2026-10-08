@@ -74,6 +74,72 @@ export async function initDatabase(): Promise<void> {
       PRIMARY KEY (run_id, code)
     )
   `);
+
+
+  await run(\`
+    CREATE TABLE IF NOT EXISTS select_review (
+      run_id VARCHAR NOT NULL,
+      code VARCHAR NOT NULL,
+      is_main BOOLEAN NOT NULL,
+      select_date DATE NOT NULL,
+      next_trade_date DATE,
+      status VARCHAR NOT NULL,
+      entry_price DOUBLE,
+      exit_date DATE,
+      exit_price DOUBLE,
+      exit_reason VARCHAR,
+      return_pct DOUBLE,
+      max_profit_pct DOUBLE,
+      max_loss_pct DOUBLE,
+      next_open DOUBLE,
+      next_high DOUBLE,
+      next_low DOUBLE,
+      next_close DOUBLE,
+      next_close_return_pct DOUBLE,
+      hit_take_profit1 BOOLEAN,
+      hit_take_profit2 BOOLEAN,
+      days_held INTEGER,
+      updated_at TIMESTAMP NOT NULL,
+      PRIMARY KEY (run_id, code)
+    )
+  \`);
+
+  await run(\`
+    CREATE TABLE IF NOT EXISTS backtest_run (
+      id VARCHAR PRIMARY KEY,
+      status VARCHAR NOT NULL,
+      start_date DATE,
+      end_date DATE,
+      trade_days INTEGER NOT NULL,
+      signals INTEGER NOT NULL,
+      trades INTEGER NOT NULL,
+      message VARCHAR,
+      default_json VARCHAR,
+      best_json VARCHAR,
+      created_at TIMESTAMP NOT NULL,
+      finished_at TIMESTAMP
+    )
+  \`);
+
+  await run(\`
+    CREATE TABLE IF NOT EXISTS backtest_parameter (
+      backtest_id VARCHAR NOT NULL,
+      rank INTEGER NOT NULL,
+      stop_pct DOUBLE NOT NULL,
+      target_pct DOUBLE NOT NULL,
+      trailing_start_pct DOUBLE NOT NULL,
+      trailing_drawdown_pct DOUBLE NOT NULL,
+      hold_days INTEGER NOT NULL,
+      trades INTEGER NOT NULL,
+      win_rate DOUBLE,
+      avg_return DOUBLE,
+      profit_loss_ratio DOUBLE,
+      max_drawdown DOUBLE,
+      total_return DOUBLE,
+      score DOUBLE,
+      PRIMARY KEY (backtest_id, rank)
+    )
+  \`);
 }
 
 export async function closeDatabase(): Promise<void> {
