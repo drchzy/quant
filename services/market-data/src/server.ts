@@ -6,6 +6,7 @@ import {
   initDatabase
 } from './database.js';
 import { registerRoutes } from './routes.js';
+import { getMarketDataSourceStatus } from './eastmoney.js';
 import { startScheduler } from './scheduler.js';
 
 const app = Fastify({
@@ -21,6 +22,7 @@ app.get('/health', async () => ({
   status: 'ok',
   service: 'market-data',
   dataSource: 'eastmoney + tencent fallback',
+  sourceStatus: getMarketDataSourceStatus(),
   database: config.databasePath,
   time: new Date().toISOString()
 }));
