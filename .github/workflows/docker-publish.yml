@@ -102,3 +102,39 @@ jobs:
           push: true
           tags: ${{ steps.web_meta.outputs.tags }}
           labels: ${{ steps.web_meta.outputs.labels }}
+
+      - name: 更新 market-data Docker Hub 中文说明
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-market-data
+          short-description: "Quant A股行情采集、DuckDB持久化与统一行情API"
+          readme-filepath: ./docker/README-market-data.md
+
+      - name: 更新 stock-select Docker Hub 中文说明
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-stock-select
+          short-description: "Quant A股超短趋势选股、复盘与参数回测"
+          readme-filepath: ./docker/README-stock-select.md
+
+      - name: 更新 trade-manager Docker Hub 中文说明
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-trade-manager
+          short-description: "Quant 持仓、盘中执行状态、T+1与止盈止损监控"
+          readme-filepath: ./docker/README-trade-manager.md
+
+      - name: 更新 Web Docker Hub 中文说明
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-web
+          short-description: "Quant A股行情、选股、盘中执行与策略复盘Web界面"
+          readme-filepath: ./docker/README-web.md
