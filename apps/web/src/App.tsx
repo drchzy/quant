@@ -1555,6 +1555,7 @@ function SyncPage() {
         <div className="panel-title-row">
           <div>
             <h3>数据源管理</h3>
+              <p><a href="/bridge.html" target="_blank" rel="noopener noreferrer">外部行情桥接：在可访问东财的电脑上采集并推送数据 →</a></p>
             <p>
               数据源按能力过滤后从上到下依次尝试；例如新浪支持全市场快照，腾讯支持日K、分钟K和指数。禁用的数据源不会参与业务请求。
             </p>
