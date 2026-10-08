@@ -1,0 +1,20 @@
+services:
+  market-data:
+    build:
+      context: .
+      dockerfile: services/market-data/Dockerfile
+
+  stock-select:
+    build:
+      context: .
+      dockerfile: services/stock-select/Dockerfile
+
+  trade-manager:
+    build:
+      context: .
+      dockerfile: services/trade-manager/Dockerfile
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile

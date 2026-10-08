@@ -1,9 +1,6 @@
 services:
   market-data:
     image: ${MARKET_DATA_IMAGE:-drchzy/quant-market-data:latest}
-    build:
-      context: .
-      dockerfile: services/market-data/Dockerfile
     container_name: quant-market-data
     restart: unless-stopped
     environment:
@@ -16,9 +13,9 @@ services:
       EASTMONEY_TIMEOUT_MS: ${EASTMONEY_TIMEOUT_MS:-10000}
       EASTMONEY_PAGE_SIZE: ${EASTMONEY_PAGE_SIZE:-500}
     volumes:
-      - ./data:/app/data
+      - ${RUNTIME_DATA_DIR:-./runtime/data}:/app/data
     ports:
-      - "8080:8080"
+      - "${BACKEND_BIND_IP:-127.0.0.1}:${MARKET_DATA_PORT:-8080}:8080"
     healthcheck:
       test:
         [
@@ -33,9 +30,6 @@ services:
 
   stock-select:
     image: ${STOCK_SELECT_IMAGE:-drchzy/quant-stock-select:latest}
-    build:
-      context: .
-      dockerfile: services/stock-select/Dockerfile
     container_name: quant-stock-select
     restart: unless-stopped
     depends_on:
@@ -72,9 +66,9 @@ services:
       PLAN_MAX_POSITION_PCT: ${PLAN_MAX_POSITION_PCT:-50}
       PLAN_TIME_STOP_DAYS: ${PLAN_TIME_STOP_DAYS:-2}
     volumes:
-      - ./data:/app/data
+      - ${RUNTIME_DATA_DIR:-./runtime/data}:/app/data
     ports:
-      - "8090:8090"
+      - "${BACKEND_BIND_IP:-127.0.0.1}:${STOCK_SELECT_PORT:-8090}:8090"
     healthcheck:
       test:
         [
@@ -89,9 +83,6 @@ services:
 
   trade-manager:
     image: ${TRADE_MANAGER_IMAGE:-drchzy/quant-trade-manager:latest}
-    build:
-      context: .
-      dockerfile: services/trade-manager/Dockerfile
     container_name: quant-trade-manager
     restart: unless-stopped
     depends_on:
@@ -117,9 +108,9 @@ services:
       TRADE_DEFAULT_TRAILING_DRAWDOWN_PCT: ${TRADE_DEFAULT_TRAILING_DRAWDOWN_PCT:-2}
       TRADE_DEFAULT_TIME_STOP_DAYS: ${TRADE_DEFAULT_TIME_STOP_DAYS:-2}
     volumes:
-      - ./data:/app/data
+      - ${RUNTIME_DATA_DIR:-./runtime/data}:/app/data
     ports:
-      - "8091:8091"
+      - "${BACKEND_BIND_IP:-127.0.0.1}:${TRADE_MANAGER_PORT:-8091}:8091"
     healthcheck:
       test:
         [
@@ -134,9 +125,6 @@ services:
 
   web:
     image: ${WEB_IMAGE:-drchzy/quant-web:latest}
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
     container_name: quant-web
     restart: unless-stopped
     depends_on:
@@ -146,5 +134,9 @@ services:
         condition: service_healthy
       trade-manager:
         condition: service_healthy
+    environment:
+      WEB_AUTH_ENABLED: ${WEB_AUTH_ENABLED:-true}
+      WEB_USERNAME: ${WEB_USERNAME:-admin}
+      WEB_PASSWORD: ${WEB_PASSWORD:-quant123456}
     ports:
-      - "${WEB_PORT:-8088}:80"
+      - "${WEB_BIND_IP:-0.0.0.0}:${WEB_PORT:-8088}:80"
