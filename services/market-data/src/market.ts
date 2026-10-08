@@ -181,15 +181,16 @@ async function getStoredMarketRows(): Promise<MarketStock[]> {
 }
 
 /** 按启用与优先级逐级补齐指数；每个指数成功后不再请求后续源。 */
-async function getLiveIndexes() {
+async function getLiveIndexes(signal?: AbortSignal) {
   const enabled = await getEnabledSources('index');
   const quotes = new Map<string, IndexQuote>();
   const errors: string[] = [];
   for (const source of enabled) {
+    if (signal?.aborted) throw new DOMException('同步任务已取消', 'AbortError');
     const pending = mainIndexes.filter((item) => !quotes.has(item.code));
     if (pending.length === 0) break;
     try {
-      const result = await fetchIndexesBySource(source, pending);
+      const result = await fetchIndexesBySource(source, pending, signal);
       for (const item of pending) {
         const quote = result.get(item.code);
         if (quote && quote.price > 0 && Number.isFinite(quote.pct)) {
@@ -205,6 +206,7 @@ async function getLiveIndexes() {
     throw new Error('指数数据源全部不可用：' + errors.join('; '));
   }
   for (const item of mainIndexes) {
+    if (signal?.aborted) throw new DOMException('同步任务已取消', 'AbortError');
     const quote = quotes.get(item.code);
     if (!quote) continue;
     await run(
@@ -230,6 +232,10 @@ async function getLiveIndexes() {
     missing: mainIndexes.filter((item) => !quotes.has(item.code)).map((item) => item.name),
     errors
   };
+}
+
+export async function syncMarketIndexes(signal?: AbortSignal): Promise<void> {
+  await getLiveIndexes(signal);
 }
 
 async function getStoredIndexes() {
