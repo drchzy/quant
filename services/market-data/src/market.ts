@@ -14,6 +14,7 @@ import {
   mainIndexes
 } from './eastmoney.js';
 import type { MarketStock, SectorType } from './types.js';
+import { getSourceSettings } from './source-manager.js';
 
 let marketCache:
   | { time: number; data: MarketStock[] }
@@ -772,7 +773,16 @@ export async function getSectorList(
   type: SectorType,
   live = true
 ) {
-  if (live) return getLiveSectors(type);
+  if (live) {
+    const sources = await getSourceSettings();
+    if (sources.some((item) => item.id === 'eastmoney_push2' && item.enabled)) {
+      try {
+        return await getLiveSectors(type);
+      } catch {
+        // 实时源不可用时返回本地快照，不能让板块页面报 500。
+      }
+    }
+  }
 
   return all<any>(
     `SELECT * FROM sector

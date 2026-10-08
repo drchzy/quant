@@ -170,7 +170,7 @@ export async function getEnabledSources(
       if (!definition) {
         throw new Error(`未知数据源：${raw}`);
       }
-      if (!definition.capabilities.includes(capability)) {
+      if (!definition.capabilities.includes(capability) || !allowed.has(source)) {
         continue;
       }
       if (definition.needsToken &&
