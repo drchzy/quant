@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiGet, apiPost, formatMoney, formatPct } from './api';
 import { DailyChart, MinuteChart } from './charts';
 
-type Page = 'market' | 'stock' | 'sector' | 'sync';
+type Page = 'market' | 'stock' | 'sector' | 'select' | 'sync';
 
 function Change({ value }: { value: unknown }) {
   const number = Number(value || 0);
@@ -394,6 +394,214 @@ function SectorPage() {
   );
 }
 
+
+function SelectPage() {
+  const [data, setData] = useState<any>(null);
+  const [config, setConfig] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [running, setRunning] = useState(false);
+
+  const load = async () => {
+    setError('');
+    try {
+      const [latest, strategyConfig] = await Promise.all([
+        apiGet<any>('/select/latest?limit=10'),
+        apiGet<any>('/select/config')
+      ]);
+      setData(latest);
+      setConfig(strategyConfig);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  const run = async () => {
+    setRunning(true);
+    setError('');
+    try {
+      await apiPost('/select/run');
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const rows = data?.data || [];
+  const mainRows = rows.filter((row: any) => row.isMain);
+
+  return (
+    <>
+      <div className="page-title">
+        <div>
+          <h2>每日选股</h2>
+          <p>收盘后按固定规则筛选，第二天只执行计划，不盘中临时改逻辑</p>
+        </div>
+        <button disabled={running} onClick={() => void run()}>
+          {running ? '正在选股…' : '立即选股'}
+        </button>
+      </div>
+
+      {error && <div className="error">{error}</div>}
+
+      {!data?.run && !error && (
+        <div className="notice">
+          还没有选股记录。先完成历史日 K 初始化，再点击“立即选股”。
+        </div>
+      )}
+
+      {data?.run && (
+        <div className="notice">
+          交易日 {String(data.run.trade_date).slice(0, 10)}，
+          共扫描 {data.run.total} 只，选出 {data.run.passed} 只候选。
+          当前策略：{data.run.strategy}
+        </div>
+      )}
+
+      {mainRows.length > 0 && (
+        <>
+          <h3 className="section-title">明日重点 3 只</h3>
+          <div className="select-grid">
+            {mainRows.map((row: any) => (
+              <section className="card select-card" key={row.code}>
+                <div className="select-head">
+                  <div>
+                    <span className="rank">#{row.rank}</span>
+                    <b>{row.name}</b>
+                    <small>{row.code}</small>
+                  </div>
+                  <span className="tag">{row.setup}</span>
+                </div>
+
+                <div className="score">
+                  <strong>{row.score}</strong>
+                  <span>策略分</span>
+                </div>
+
+                <div className="plan-grid">
+                  <div>
+                    <span>参考收盘</span>
+                    <b>{row.close}</b>
+                  </div>
+                  <div>
+                    <span>买入区</span>
+                    <b>{row.plan.entryLow} - {row.plan.entryHigh}</b>
+                  </div>
+                  <div>
+                    <span>不追价</span>
+                    <b>{row.plan.noChasePrice}</b>
+                  </div>
+                  <div>
+                    <span>止损</span>
+                    <b>{row.plan.stopPrice}</b>
+                  </div>
+                  <div>
+                    <span>第一止盈</span>
+                    <b>{row.plan.takeProfit1}</b>
+                  </div>
+                  <div>
+                    <span>第二止盈</span>
+                    <b>{row.plan.takeProfit2}</b>
+                  </div>
+                </div>
+
+                <ul className="reason-list">
+                  {row.reasons.map((reason: string) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        </>
+      )}
+
+      {rows.length > 0 && (
+        <section className="panel">
+          <h3>全部候选</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>代码</th>
+                <th>名称</th>
+                <th>形态</th>
+                <th>评分</th>
+                <th>收盘</th>
+                <th>5日涨幅</th>
+                <th>量能</th>
+                <th>止损</th>
+                <th>第一止盈</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row: any) => (
+                <tr key={row.code}>
+                  <td>{row.rank}</td>
+                  <td>{row.code}</td>
+                  <td>{row.name}</td>
+                  <td>{row.setup}</td>
+                  <td>{row.score}</td>
+                  <td>{row.close}</td>
+                  <td>{formatPct(row.return5)}</td>
+                  <td>
+                    {row.volumeRate5 == null
+                      ? '-'
+                      : row.volumeRate5.toFixed(2)}
+                  </td>
+                  <td>{row.plan.stopPrice}</td>
+                  <td>{row.plan.takeProfit1}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {config && (
+        <section className="panel">
+          <h3>当前执行纪律</h3>
+          <div className="rule-grid">
+            <div>
+              <span>单票最大仓位</span>
+              <b>{config.plan.maxPositionPct}%</b>
+            </div>
+            <div>
+              <span>超过收盘涨幅不追</span>
+              <b>{config.plan.noChasePct}%</b>
+            </div>
+            <div>
+              <span>第一止盈</span>
+              <b>{config.plan.firstTakeProfitPct}%</b>
+            </div>
+            <div>
+              <span>移动止盈启动</span>
+              <b>{config.plan.trailingStartPct}%</b>
+            </div>
+            <div>
+              <span>高点回撤保护</span>
+              <b>{config.plan.trailingDrawdownPct}%</b>
+            </div>
+            <div>
+              <span>时间止损</span>
+              <b>{config.plan.timeStopDays}个交易日</b>
+            </div>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
 function SyncPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [days, setDays] = useState(120);
@@ -516,6 +724,7 @@ export default function App() {
     ['market', '市场总览'],
     ['stock', '股票查询'],
     ['sector', '板块对比'],
+    ['select', '每日选股'],
     ['sync', '数据同步']
   ];
 
@@ -544,6 +753,7 @@ export default function App() {
         {page === 'market' && <MarketPage />}
         {page === 'stock' && <StockPage />}
         {page === 'sector' && <SectorPage />}
+        {page === 'select' && <SelectPage />}
         {page === 'sync' && <SyncPage />}
       </main>
     </div>
