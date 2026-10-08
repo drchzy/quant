@@ -137,6 +137,43 @@ export async function initDatabase(): Promise<void> {
       finished_at TIMESTAMP
     )
   `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS data_source_setting (
+      source_id VARCHAR PRIMARY KEY,
+      enabled BOOLEAN NOT NULL,
+      priority INTEGER NOT NULL,
+      updated_at TIMESTAMP NOT NULL
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS data_source_status (
+      source_id VARCHAR PRIMARY KEY,
+      last_status VARCHAR,
+      last_capability VARCHAR,
+      last_message VARCHAR,
+      last_latency_ms DOUBLE,
+      last_count INTEGER,
+      last_test_at TIMESTAMP,
+      last_success_at TIMESTAMP,
+      last_failure_at TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS sync_job_source (
+      job_id VARCHAR NOT NULL,
+      source_id VARCHAR NOT NULL,
+      priority INTEGER NOT NULL,
+      status VARCHAR NOT NULL,
+      message VARCHAR,
+      started_at TIMESTAMP,
+      finished_at TIMESTAMP,
+      PRIMARY KEY (job_id, source_id)
+    )
+  `);
 }
 
 export async function closeDatabase(): Promise<void> {
