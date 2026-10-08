@@ -188,12 +188,40 @@ function MarketPage() {
 function StockPage() {
   const [input, setInput] = useState('600186');
   const [data, setData] = useState<any>(null);
+  const [searchRows, setSearchRows] = useState<any[]>([]);
   const [error, setError] = useState('');
 
-  const load = async (code = input) => {
+  const loadCode = async (code: string) => {
     setError('');
+    setSearchRows([]);
+
     try {
       setData(await apiGet(`/ai/stock/${code}`));
+      setInput(code);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  const search = async () => {
+    const value = input.trim();
+
+    if (/^\d{6}$/.test(value)) {
+      await loadCode(value);
+      return;
+    }
+
+    setError('');
+    try {
+      const result = await apiGet<any>(
+        `/stocks/search?q=${encodeURIComponent(value)}`
+      );
+      setSearchRows(result.data || []);
+      if ((result.data || []).length === 0) {
+        setError('没有找到匹配股票。名称搜索需要先完成一次“同步今日市场”。');
+      }
     } catch (error) {
       setError(
         error instanceof Error ? error.message : String(error)
@@ -202,7 +230,7 @@ function StockPage() {
   };
 
   useEffect(() => {
-    void load('600186');
+    void loadCode('600186');
   }, []);
 
   return (
@@ -210,7 +238,7 @@ function StockPage() {
       <div className="page-title">
         <div>
           <h2>股票查询</h2>
-          <p>实时行情、历史日 K、分钟数据和技术指标</p>
+          <p>支持代码或名称搜索，查看实时行情、历史日 K、分钟数据和技术指标</p>
         </div>
       </div>
 
@@ -218,13 +246,46 @@ function StockPage() {
         <input
           value={input}
           onChange={(event) => setInput(event.target.value)}
-          placeholder="输入 6 位股票代码"
+          placeholder="输入代码或名称，例如 600186 / 莲花"
           onKeyDown={(event) => {
-            if (event.key === 'Enter') void load();
+            if (event.key === 'Enter') void search();
           }}
         />
-        <button onClick={() => void load()}>查询</button>
+        <button onClick={() => void search()}>搜索</button>
       </div>
+
+      {searchRows.length > 0 && (
+        <section className="panel search-result">
+          <h3>搜索结果</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>市场</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {searchRows.map((row) => (
+                <tr key={row.code}>
+                  <td>{row.code}</td>
+                  <td>{row.name}</td>
+                  <td>{row.market_name}</td>
+                  <td>
+                    <button
+                      className="text-button"
+                      onClick={() => void loadCode(row.code)}
+                    >
+                      查看
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       {error && <div className="error">{error}</div>}
 
