@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quant 外部行情采集桥接</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#17324c;background:#f5f8fc}
+*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:28px 18px 55px}
+header{display:flex;justify-content:space-between;align-items:center;gap:20px}h1{font-size:27px;margin:0 0 8px}h2{font-size:18px;margin:0 0 16px}
+.sub,.muted{color:#62758a}.sub{font-size:14px}section{background:#fff;border:1px solid #e3eaf2;border-radius:15px;padding:22px;margin-top:17px;box-shadow:0 2px 12px #193c6408}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+label{display:block;font-size:13px;color:#465b6e}label b{display:block;margin-bottom:7px;font-weight:600}
+input,select,textarea{font:inherit;width:100%;padding:10px 11px;border:1px solid #cbd7e3;border-radius:8px;background:#fff;color:#142e46}
+textarea{min-height:84px;resize:vertical}input:focus,textarea:focus,select:focus{outline:2px solid #accde9;border-color:#397eb9}
+small{display:block;line-height:1.65;margin-top:6px}.checks{display:flex;flex-wrap:wrap;gap:10px}
+.check{border:1px solid #d6e2eb;border-radius:8px;padding:9px 14px;font-size:14px;display:flex;align-items:center;gap:8px;color:#203c57}
+.check input{width:auto}.actions{display:flex;gap:11px;flex-wrap:wrap;align-items:center}
+button{border:1px solid #c7d8e6;border-radius:9px;padding:11px 17px;color:#24577f;background:#fff;cursor:pointer;font-weight:600}
+button.primary{color:#fff;background:#1766a8;border-color:#1766a8}button.danger{color:#a53838}button:disabled{opacity:.45;cursor:not-allowed}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stats>div{background:#f5f8fc;border-radius:10px;padding:15px}
+.stats strong{display:block;font-size:23px;color:#15588d;margin-top:4px}
+pre{height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:#0d1b2a;color:#d3eaf5;border-radius:10px;padding:16px;font:12px/1.7 ui-monospace,monospace}
+.warning{background:#fff8e9;color:#80540a;border:1px solid #ffe1a6;border-radius:9px;padding:12px;font-size:13px}
+#status{font-size:14px;color:#476682}a{color:#1766a8;text-decoration:none}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:520px){.grid,.grid.two{grid-template-columns:1fr}header{display:block}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>外部行情采集桥接</h1><div class="sub">在能访问东方财富的电脑上运行采集，自动转发至 Quant 服务器入库</div></div><a href="/">返回 Quant 平台 →</a></header>
+<section>
+<h2>1. 接收服务器</h2>
+<div class="grid two">
+<label><b>Quant 服务地址</b><input id="target" placeholder="http://192.168.5.56:8088"><small>默认与当前页面相同；也可以指定其他 Quant 实例</small></label>
+<label><b>导入安全令牌</b><input id="token" type="password" autocomplete="off" placeholder="服务器 web/.env 中的 BRIDGE_IMPORT_TOKEN"><small>令牌仅在当前网页内存中使用，不写入浏览器本地存储</small></label>
+</div>
+<div class="actions" style="margin-top:12px"><button id="test">测试接收接口</button><span id="status">尚未连接</span></div>
+</section>
+<section>
+<h2>2. 要采集的数据</h2>
+<div class="checks" id="types">
+<label class="check"><input type="checkbox" value="snapshot" checked>全市场快照</label>
+<label class="check"><input type="checkbox" value="daily" checked>日 K</label>
+<label class="check"><input type="checkbox" value="minute">分钟 K</label>
+<label class="check"><input type="checkbox" value="intraday">分时走势</label>
+<label class="check"><input type="checkbox" value="index" checked>主要指数</label>
+<label class="check"><input type="checkbox" value="sector" checked>行业 / 概念板块</label>
+</div>
+<div class="grid two" style="margin-top:18px">
+<label><b>采集股票范围</b><select id="scope"><option value="selected">指定股票（代码或名称）</option><option value="all">全部 A 股</option></select></label>
+<label><b>股票代码 / 股票名称</b><textarea id="stocks" placeholder="600186&#10;000001&#10;贵州茅台（自动在 Quant 已有股票中搜索）">600186</textarea><small>逗号、空格或换行分隔。若按名称查不到，请先同步全市场快照</small></label>
+</div>
+<div class="grid" style="margin-top:14px">
+<label><b>起始日期</b><input type="date" id="from"></label>
+<label><b>结束日期</b><input type="date" id="to"></label>
+<label><b>分钟 K 周期</b><select id="period"><option value="1">1 分钟</option><option value="5" selected>5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select></label>
+<label><b>日 K 复权</b><select id="fqt"><option value="0">不复权</option><option value="1" selected>前复权</option><option value="2">后复权</option></select></label>
+</div>
+<small class="muted">全市场模式将分页检索 A 股代码；日/分钟 K 按代码逐只查询。东财分时接口通常只能提供最近 1～5 个交易日，不能保证指定的任意历史日期都有数据。</small>
+</section>
+<section>
+<h2>3. 采集频率及保护措施</h2>
+<div class="grid">
+<label><b>请求间隔（毫秒）</b><input type="number" id="interval" min="200" max="60000" value="1300"><small>所有外部请求串行；建议不少于 1000 ms</small></label>
+<label><b>失败重试次数</b><select id="retry"><option value="0">0 次</option><option value="1" selected>1 次</option><option value="2">2 次</option><option value="3">3 次</option></select></label>
+<label><b>每批入库数量</b><input type="number" id="batch" min="1" max="200" value="100"></label>
+<label><b>本次最多股票数</b><input type="number" id="maxStocks" min="1" max="6000" value="100"><small>全部模式可增大到 6000；耗时会很长</small></label>
+</div>
+<div class="grid two" style="margin-top:14px">
+<label><b>东财首选集群</b><select id="host"><option value="push2delay.eastmoney.com">push2delay（行情延时集群）</option><option value="push2.eastmoney.com">push2（实时集群）</option></select></label>
+<label><b>单次请求超时（秒）</b><input type="number" id="timeout" min="3" max="60" value="15"></label>
+</div>
+<div class="warning" style="margin-top:16px">浏览器通过东方财富 JSONP 接口采集，无需让服务器直接访问东财。部分上游接口可能限制跨站脚本、限速或仅保留近期数据；若返回空或请求超时，请调整频率和集群。不要向公网暴露弱令牌。</div>
+</section>
+<section>
+<div class="actions">
+<button id="start" class="primary">开始采集并入库</button>
+<button id="pause" disabled>暂停</button>
+<button id="stop" class="danger" disabled>停止</button>
+<span id="state" class="muted">空闲</span>
+</div>
+<div class="stats" style="margin-top:18px">
+<div><span>外部请求</span><strong id="requests">0</strong></div>
+<div><span>已入库记录</span><strong id="written">0</strong></div>
+<div><span>失败请求</span><strong id="errors">0</strong></div>
+<div><span>已完成股票</span><strong id="completed">0</strong></div>
+</div>
+<h2 style="margin-top:20px">执行日志</h2>
+<pre id="log" aria-live="polite">准备就绪。选择任务后点击“开始采集并入库”。</pre>
+</section>
+</main>
+<script>
+(function(){
+'use strict';
+var $=function(id){return document.getElementById(id);};
+var busy=false,paused=false,stopped=false,lastRequest=0;
+var counts={requests:0,written:0,errors:0,completed:0};
+var indexList=[
+{code:'000001',name:'上证指数',secid:'1.000001'},
+{code:'399001',name:'深证成指',secid:'0.399001'},
+{code:'399006',name:'创业板指',secid:'0.399006'},
+{code:'000688',name:'科创50',secid:'1.000688'},
+{code:'000300',name:'沪深300',secid:'1.000300'}
+];
+$('target').value=location.protocol==='http:'||location.protocol==='https:'?location.origin:'http://192.168.5.56:8088';
+function today(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+function backDays(n){var d=new Date();d.setDate(d.getDate()-n);return d.toISOString().slice(0,10);}
+$('to').value=today();$('from').value=backDays(30);
+function log(msg){var p=$('log');var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});p.textContent+='\\n['+t+'] '+msg;var ls=p.textContent.split('\\n');if(ls.length>250)p.textContent=ls.slice(-240).join('\\n');p.scrollTop=p.scrollHeight;}
+function show(){Object.keys(counts).forEach(function(k){$(k).textContent=counts[k];});}
+function n(v){return v===null||v===undefined||v===''||v==='-'?null:(Number.isFinite(Number(v))?Number(v):null);}
+function safeDate(d){return String(d||'').slice(0,10).replace(/\//g,'-');}
+function codeMarket(code){return /^(5|6|9)/.test(code)?'1.':'0.';}
+function options(){return {base:$('target').value.trim().replace(/\/+$/,''),token:$('token').value.trim(),gap:Math.max(200,Math.min(60000,Number($('interval').value)||1300)),retry:Number($('retry').value),batch:Math.min(200,Math.max(1,Number($('batch').value)||100)),maxStocks:Math.min(6000,Math.max(1,Number($('maxStocks').value)||100)),timeout:Math.max(3000,Math.min(60000,(Number($('timeout').value)||15)*1000)),from:$('from').value,to:$('to').value,period:Number($('period').value),fqt:$('fqt').value,host:$('host').value,scope:$('scope').value,types:Array.from(document.querySelectorAll('#types input:checked')).map(function(e){return e.value;})};}
+function sleep(ms){return new Promise(function(ok){setTimeout(ok,ms);});}
+async function gate(){while(paused&&!stopped)await sleep(200);if(stopped)throw new Error('用户已停止任务');}
+async function pace(cfg){await gate();var remain=cfg.gap-(Date.now()-lastRequest);if(remain>0)await sleep(remain);await gate();lastRequest=Date.now();}
+var seq=0;
+function jsonp(url,timeout){return new Promise(function(resolve,reject){
+var cb='quantBridge'+Date.now()+'_'+(++seq);
+var script=document.createElement('script');
+var done=false;
+var timer=setTimeout(function(){finish(new Error('JSONP 请求超时'));},timeout);
+function finish(err,value){if(done)return;done=true;clearTimeout(timer);script.onerror=null;script.remove();try{delete window[cb];}catch(e){window[cb]=undefined;}if(err)reject(err);else resolve(value);}
+window[cb]=function(data){finish(null,data);};
+script.onerror=function(){finish(new Error('上游请求失败（域名/网络/风控）'));};
+script.src=url+(url.indexOf('?')<0?'?':'&')+'cb='+encodeURIComponent(cb);
+document.head.appendChild(script);
+});}
+function params(o){return Object.keys(o).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(String(o[k]));}).join('&');}
+async function upstream(kind,path,args,cfg){
+var hosts=kind==='history'?['push2his.eastmoney.com']:(cfg.host==='push2.eastmoney.com'?['push2.eastmoney.com','push2delay.eastmoney.com']:['push2delay.eastmoney.com','push2.eastmoney.com']);
+var err;
+for(var i=0;i<hosts.length;i++){for(var attempt=0;attempt<=cfg.retry;attempt++){
+await pace(cfg);counts.requests++;show();
+var url='https://'+hosts[i]+path+'?'+params(args);
+try{var result=await jsonp(url,cfg.timeout);if(!result||!result.data)throw new Error('数据为空');return result.data;}
+catch(e){err=e;counts.errors++;show();log(hosts[i]+' '+path+' 失败 '+(attempt+1)+' 次：'+e.message);if(stopped)throw e;}
+}}
+throw err||new Error('外部数据源失败');
+}
+async function receiver(path,body,cfg){
+var result=await fetch(cfg.base+'/api/v1/bridge/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Bridge-Token':cfg.token},body:JSON.stringify(body)});
+var data=await result.json().catch(function(){return {};});
+if(!result.ok)throw new Error('接收服务器 '+result.status+'：'+(data.error||'未知错误'));
+return data;
+}
+async function push(type,rows,cfg){
+for(var i=0;i<rows.length;i+=cfg.batch){await gate();var chunk=rows.slice(i,i+cfg.batch);var result=await receiver('import',{type:type,rows:chunk},cfg);counts.written+=result.count||0;show();log('入库 '+type+'：'+result.count+' 条');}
+}
+async function testServer(){var cfg=options();try{var r=await fetch(cfg.base+'/api/v1/bridge/status',{headers:{'X-Bridge-Token':cfg.token}});var d=await r.json();if(!r.ok)throw new Error(d.error||'HTTP '+r.status);$('status').textContent='连接成功；现有数据：'+JSON.stringify(d.counts);log('接收接口连接成功');}catch(e){$('status').textContent='连接失败：'+e.message;log('连接失败：'+e.message);}}
+$('test').onclick=function(){void testServer();};
+function clistArgs(page,fs){return {pn:page,pz:100,po:1,np:1,fltt:2,invt:2,fid:'f3',fs:fs,fields:'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23'};}
+var stockFs='m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048';
+function snapshotRow(r,cfg){return {code:String(r.f12||''),name:String(r.f14||''),tradeDate:cfg.to||today(),close:n(r.f2),pct:n(r.f3),change:n(r.f4),volume:n(r.f5),amount:n(r.f6),amplitude:n(r.f7),turnover:n(r.f8),pe:n(r.f9),volumeRatio:n(r.f10),high:n(r.f15),low:n(r.f16),open:n(r.f17),preClose:n(r.f18),totalMarketCap:n(r.f20),floatMarketCap:n(r.f21),pb:n(r.f23)};}
+async function loadUniverse(cfg,store){
+var result=[];var page=1,total=0;
+while(page<=100){await gate();var d=await upstream('live','/api/qt/clist/get',clistArgs(page,stockFs),cfg);var raw=d.diff;if(!Array.isArray(raw)||raw.length===0)break;
+var rows=raw.map(function(r){return snapshotRow(r,cfg);}).filter(function(r){return /^\d{6}$/.test(r.code)&&r.name&&r.close!==null;});
+result.push.apply(result,rows);if(store&&rows.length)await push('snapshot',rows,cfg);
+total=Number(d.total||0);log('A股清单：第'+page+'页 / 累计 '+result.length+' 条');
+if(raw.length<100||(total>0&&result.length>=total))break;page++;
+}
+return result;
+}
+async function resolveStocks(cfg,universe){
+if(cfg.scope==='all')return universe.slice(0,cfg.maxStocks);
+var tokens=$('stocks').value.split(/[\s,，;；、]+/).map(function(s){return s.trim();}).filter(Boolean);
+if(!tokens.length)throw new Error('请填写代码或股票名称');
+var found=new Map();
+for(var token of tokens){if(/^\d{6}$/.test(token)){found.set(token,{code:token,name:token});continue;}
+var matches=universe.filter(function(s){return s.name===token||s.name.indexOf(token)>=0;});
+if(!matches.length){try{var r=await fetch(cfg.base+'/api/v1/stocks/search?q='+encodeURIComponent(token));if(r.ok){var body=await r.json();matches=body.data||[];}}catch(e){}}
+if(!matches.length){log('未找到股票名称：'+token+'，请使用代码或先采集全市场清单');continue;}
+var exact=matches.find(function(x){return x.name===token;})||matches[0];found.set(exact.code,exact);log('股票名称 '+token+' → '+exact.code);
+}
+return Array.from(found.values()).slice(0,cfg.maxStocks);
+}
+function previousDay(date){var d=new Date(date+'T00:00:00Z');d.setUTCDate(d.getUTCDate()-1);return d.toISOString().slice(0,10).replace(/-/g,'');}
+function barsFromLines(lines,stock,minute,period){return lines.map(function(line){var a=String(line).split(',');var row={code:stock.code,name:stock.name,date:safeDate(a[0]),open:n(a[1]),close:n(a[2]),high:n(a[3]),low:n(a[4]),volume:n(a[5]),amount:n(a[6]),amplitude:n(a[7]),pct:n(a[8]),change:n(a[9]),turnover:n(a[10])};if(minute){row.tradeTime=String(a[0]).replace('T',' ');row.period=period;}return row;});}
+async function kline(stock,period,cfg){
+var dateEnd=cfg.to.replace(/-/g,''),start=cfg.from.replace(/-/g,'');var all=0;
+for(var page=0;page<45;page++){await gate();
+var d=await upstream('history','/api/qt/stock/kline/get',{secid:codeMarket(stock.code)+stock.code,klt:period,fqt:cfg.fqt,beg:start,end:dateEnd,lmt:1000,fields1:'f1,f2,f3,f4,f5,f6',fields2:'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'},cfg);
+var lines=Array.isArray(d.klines)?d.klines:[];
+if(!lines.length)break;
+var earliest=String(lines[0]).slice(0,10).replace(/-/g,'');
+var filtered=lines.filter(function(line){var day=String(line).slice(0,10).replace(/-/g,'');return day>=start&&day<=cfg.to.replace(/-/g,'');});
+var minute=period!==101;var rows=barsFromLines(filtered,stock,minute,period);
+if(rows.length){await push(minute?'minute':'daily',rows,cfg);all+=rows.length;}
+if(lines.length<1000||earliest<=start)break;
+var prior=previousDay(earliest.slice(0,4)+'-'+earliest.slice(4,6)+'-'+earliest.slice(6));
+if(prior>=dateEnd)break;dateEnd=prior;
+}
+log(stock.code+' '+(period===101?'日K':'分钟K')+' 完成：'+all+' 条');
+}
+async function intraday(stock,cfg){
+var d=await upstream('live','/api/qt/stock/trends2/get',{secid:codeMarket(stock.code)+stock.code,ndays:5,fields1:'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13',fields2:'f51,f52,f53,f54,f55,f56,f57,f58',iscr:0,iscca:0},cfg);
+var pre=n(d.preClose);var rows=(d.trends||[]).map(function(line){var a=String(line).split(',');var date=safeDate(a[0]);var price=n(a[1])||n(a[2]);return {code:stock.code,name:stock.name,tradeTime:a[0],price:price,avgPrice:n(a[2]),volume:n(a[5]),amount:n(a[6]),pct:pre>0&&price!==null?(price-pre)/pre*100:null,date:date};}).filter(function(x){return x.price!==null&&x.date>=cfg.from&&x.date<=cfg.to;});
+if(rows.length)await push('intraday',rows,cfg);log(stock.code+' 分时 '+rows.length+' 条（上游通常仅保留最近几天）');
+}
+async function sectors(cfg){for(var type of ['industry','concept']){var fs=type==='industry'?'m:90+t:2+f:!50':'m:90+t:3+f:!50';var page=1,total=0;while(page<=20){await gate();var d=await upstream('live','/api/qt/clist/get',Object.assign(clistArgs(page,fs),{fields:'f2,f3,f12,f14,f62,f104,f105,f128'}),cfg);var raw=d.diff;if(!Array.isArray(raw)||!raw.length)break;var rows=raw.map(function(r){return {type:type,code:String(r.f12||''),name:String(r.f14||''),price:n(r.f2),pct:n(r.f3),mainInflow:n(r.f62),upCount:n(r.f104),downCount:n(r.f105),leadStock:String(r.f128||'')};}).filter(function(x){return x.code&&x.name;});if(rows.length)await push('sector',rows,cfg);total+=rows.length;if(raw.length<100||(d.total>0&&total>=Number(d.total)))break;page++;}}
+}
+async function indexes(cfg){var d=await upstream('live','/api/qt/ulist.np/get',{fltt:2,invt:2,fields:'f2,f3,f4,f5,f6,f12,f14,f15,f16,f17,f18',secids:indexList.map(function(x){return x.secid;}).join(',')},cfg);var map=new Map((d.diff||[]).map(function(r){return [String(r.f12),r];}));var rows=indexList.filter(function(x){return map.has(x.code);}).map(function(x){var r=map.get(x.code);return {code:x.code,name:x.name,price:n(r.f2),pct:n(r.f3),change:n(r.f4),volume:n(r.f5),amount:n(r.f6),high:n(r.f15),low:n(r.f16),open:n(r.f17),preClose:n(r.f18)};}).filter(function(x){return x.price!==null;});if(rows.length)await push('index',rows,cfg);log('主要指数：'+rows.length+'/5');}
+async function execute(){
+var cfg=options();if(!cfg.token)throw new Error('请填写桥接令牌');if(!cfg.types.length)throw new Error('至少选择一种数据类型');if(!cfg.from||!cfg.to||cfg.from>cfg.to)throw new Error('日期范围不合法');
+var response=await fetch(cfg.base+'/api/v1/bridge/status',{headers:{'X-Bridge-Token':cfg.token}});if(!response.ok){var j=await response.json().catch(function(){return {};});throw new Error('接收端不可用：'+(j.error||response.status));}
+var selected=cfg.scope==='selected';var needsStock=cfg.types.some(function(t){return t==='daily'||t==='minute'||t==='intraday';});
+var universe=[];
+if(cfg.types.includes('snapshot')||cfg.scope==='all'||(selected&&!/^\s*\d{6}([\s,，;；、]+\d{6})*\s*$/.test($('stocks').value))) {
+universe=await loadUniverse(cfg,cfg.types.includes('snapshot'));
+}
+if(cfg.types.includes('index'))await indexes(cfg);
+if(cfg.types.includes('sector'))await sectors(cfg);
+if(needsStock){
+var stocks=await resolveStocks(cfg,universe);if(!stocks.length)throw new Error('没有匹配的股票可采集');
+log('股票任务开始：'+stocks.length+'只，顺序执行');
+for(var stock of stocks){await gate();for(var type of cfg.types){try{if(type==='daily')await kline(stock,101,cfg);else if(type==='minute')await kline(stock,cfg.period,cfg);else if(type==='intraday')await intraday(stock,cfg);}catch(e){if(stopped)throw e;counts.errors++;show();log(stock.code+' '+type+' 失败，继续下一任务：'+e.message);}}
+counts.completed++;show();
+}
+}
+}
+function controls(){ $('start').disabled=busy;$('pause').disabled=!busy;$('stop').disabled=!busy;$('pause').textContent=paused?'继续':'暂停';$('state').textContent=busy?(paused?'暂停中':'采集中'):'空闲';}
+$('pause').onclick=function(){paused=!paused;controls();log(paused?'已暂停（当前网络请求可能仍在完成）':'继续采集');};
+$('stop').onclick=function(){stopped=true;paused=false;controls();log('已请求停止，完成当前网络请求后退出');};
+$('start').onclick=async function(){if(busy)return;busy=true;paused=false;stopped=false;lastRequest=0;Object.keys(counts).forEach(function(k){counts[k]=0;});show();controls();$('log').textContent='开始采集';try{await execute();log('全部选定任务执行结束，成功写入 '+counts.written+' 条');}catch(e){log('任务结束：'+e.message);}finally{busy=false;paused=false;controls();}};
+})();
+</script>
+</body>
+</html>
