@@ -13,7 +13,8 @@ export type DataCapability =
   | 'daily'
   | 'minute'
   | 'sector'
-  | 'index';
+  | 'index'
+  | 'quote';
 
 export interface DailyBar {
   date: string;
@@ -48,7 +49,7 @@ export const dataSourceDefinitions: DataSourceDefinition[] = [
     description: '独立全市场快照源，适合每日全市场同步。',
     independent: true,
     needsToken: false,
-    capabilities: ['snapshot', 'index'],
+    capabilities: ['snapshot', 'index', 'quote'],
     defaultEnabled: true,
     defaultPriority: 10
   },
@@ -58,7 +59,7 @@ export const dataSourceDefinitions: DataSourceDefinition[] = [
     description: '独立日K/分钟K备用源，适合历史行情初始化。',
     independent: true,
     needsToken: false,
-    capabilities: ['daily', 'minute', 'index'],
+    capabilities: ['daily', 'minute', 'index', 'quote'],
     defaultEnabled: true,
     defaultPriority: 20
   },
@@ -78,7 +79,7 @@ export const dataSourceDefinitions: DataSourceDefinition[] = [
     description: 'push2delay/push2 实时快照、push2his K线和板块。',
     independent: false,
     needsToken: false,
-    capabilities: ['snapshot', 'daily', 'minute', 'sector', 'index'],
+    capabilities: ['snapshot', 'daily', 'minute', 'sector', 'index', 'quote'],
     defaultEnabled: true,
     defaultPriority: 40
   },
@@ -1120,6 +1121,10 @@ export async function testDataSource(
 
   switch (source) {
     case 'sina': {
+      if (target === 'quote') {
+        const quote = await fetchStockQuoteBySource('sina', '600000', signal);
+        return { capability: 'quote', count: quote.price > 0 ? 1 : 0, sample: quote };
+      }
       if (target === 'index') {
         const rows = await fetchIndexesBySource('sina', [{ code: '000001', secid: '1.000001' }], signal);
         return { capability: 'index', count: rows.size, sample: rows.get('000001') || null };
@@ -1145,6 +1150,10 @@ export async function testDataSource(
     }
 
     case 'eastmoney_push2': {
+      if (target === 'quote') {
+        const quote = await fetchStockQuoteBySource('eastmoney_push2', '600000', signal);
+        return { capability: 'quote', count: quote.price > 0 ? 1 : 0, sample: quote };
+      }
       if (target === 'index') {
         const rows = await fetchIndexesBySource('eastmoney_push2', [{ code: '000001', secid: '1.000001' }], signal);
         return { capability: 'index', count: rows.size, sample: rows.get('000001') || null };
@@ -1200,6 +1209,10 @@ export async function testDataSource(
     }
 
     case 'tencent': {
+      if (target === 'quote') {
+        const quote = await fetchStockQuoteBySource('tencent', '600000', signal);
+        return { capability: 'quote', count: quote.price > 0 ? 1 : 0, sample: quote };
+      }
       if (target === 'index') {
         const rows = await fetchIndexesBySource('tencent', [{ code: '000001', secid: '1.000001' }], signal);
         return { capability: 'index', count: rows.size, sample: rows.get('000001') || null };
@@ -1365,6 +1378,69 @@ export async function fetchIndexesBySource(
     return result;
   }
   throw new Error(source + ' 不支持指数');
+}
+
+/** 个股报价与指数同样按照启用 Provider 的能力和排序路由。 */
+export async function fetchStockQuoteBySource(
+  source: DataSourceId,
+  code: string,
+  signal?: AbortSignal
+): Promise<IndexQuote & { name?: string }> {
+  if (!/^\d{6}$/.test(code)) throw new Error('股票代码必须为六位数字');
+  const symbol = tencentSymbol(code);
+  if (source === 'sina') {
+    const raw = await withSourceLimit('sina', signal, () =>
+      fetchText('https://hq.sinajs.cn/list=' + symbol, {
+        headers: { ...browserHeaders, Referer: 'https://finance.sina.com.cn/' }
+      }, signal, 12_000)
+    );
+    const line = raw.match(/hq_str_(?:sh|sz)(\d{6})="([^"]*)"/);
+    if (!line || line[1] !== code) throw new Error('新浪个股报价返回为空');
+    const cols = line[2].split(',');
+    const price = Number(cols[3]), preClose = Number(cols[2]);
+    if (!(price > 0) || !(preClose > 0)) throw new Error('新浪个股报价无有效价格');
+    return {
+      code, price, preClose, change: price - preClose,
+      pct: (price - preClose) / preClose * 100,
+      open: number(cols[1]), high: number(cols[4]), low: number(cols[5]),
+      volume: number(cols[8]), amount: number(cols[9])
+    };
+  }
+  if (source === 'tencent') {
+    const raw = await withSourceLimit('tencent', signal, () =>
+      fetchText('https://qt.gtimg.cn/q=' + symbol, {
+        headers: { ...browserHeaders, Referer: 'https://gu.qq.com/' }
+      }, signal, 12_000)
+    );
+    const line = raw.match(/v_(?:sh|sz)(\d{6})="([^"]*)"/);
+    if (!line || line[1] !== code) throw new Error('腾讯个股报价返回为空');
+    const row = line[2].split('~');
+    const price = Number(row[3]), preClose = Number(row[4]);
+    if (!(price > 0) || !(preClose > 0)) throw new Error('腾讯个股报价无有效价格');
+    return {
+      code, name: row[1], price, preClose, change: price - preClose,
+      pct: (price - preClose) / preClose * 100,
+      open: number(row[5]), volume: number(row[6]),
+      high: number(row[33]), low: number(row[34]), amount: number(row[37])
+    };
+  }
+  if (source === 'eastmoney_push2') {
+    const secid = (/^(5|6|9)/.test(code) ? '1.' : '0.') + code;
+    const json = await eastmoneyJson('/api/qt/stock/get', new URLSearchParams({
+      secid, fltt: '2', invt: '2',
+      fields: 'f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f117,f162,f167,f168,f169,f170'
+    }), signal);
+    const row = json?.data;
+    if (!row || !(number(row.f43) > 0)) throw new Error('东财个股报价为空');
+    return {
+      code, name: String(row.f58 || ''), price: number(row.f43),
+      preClose: number(row.f60), pct: number(row.f170),
+      change: number(row.f169), open: number(row.f46),
+      high: number(row.f44), low: number(row.f45),
+      volume: number(row.f47), amount: number(row.f48)
+    };
+  }
+  throw new Error(source + ' 不支持个股实时报价');
 }
 
 export async function fetchSnapshotBySource(
