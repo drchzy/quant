@@ -448,43 +448,56 @@ export async function getMarketStocks(): Promise<MarketStock[]> {
 export async function getSectors(
   type: SectorType
 ): Promise<SectorRow[]> {
-  const params = new URLSearchParams({
-    pn: '1',
-    pz: '500',
-    po: '1',
-    np: '1',
-    fltt: '2',
-    invt: '2',
-    fid: 'f3',
-    fs:
-      type === 'industry'
-        ? 'm:90+t:2+f:!50'
-        : 'm:90+t:3+f:!50',
-    fields: 'f2,f3,f12,f14,f62,f104,f105,f128',
-    _: String(Date.now())
-  });
+  const result: SectorRow[] = [];
+  const pageSize = 100;
 
-  const json = await requestJson(
-    'live',
-    liveBases,
-    '/api/qt/clist/get',
-    params
-  );
+  for (let page = 1; page <= 20; page += 1) {
+    const params = new URLSearchParams({
+      pn: String(page),
+      pz: String(pageSize),
+      po: '1',
+      np: '1',
+      fltt: '2',
+      invt: '2',
+      fid: 'f3',
+      fs:
+        type === 'industry'
+          ? 'm:90+t:2+f:!50'
+          : 'm:90+t:3+f:!50',
+      fields: 'f2,f3,f12,f14,f62,f104,f105,f128',
+      _: String(Date.now())
+    });
 
-  const rows = json?.data?.diff;
-  if (!Array.isArray(rows)) return [];
+    const json = await requestJson(
+      'live',
+      liveBases,
+      '/api/qt/clist/get',
+      params
+    );
 
-  return rows.map((row: any) => ({
-    type,
-    code: String(row.f12 || ''),
-    name: String(row.f14 || ''),
-    price: toNumber(row.f2),
-    pct: toNumber(row.f3),
-    mainInflow: toNumber(row.f62),
-    upCount: toNumber(row.f104),
-    downCount: toNumber(row.f105),
-    leadStock: String(row.f128 || '')
-  }));
+    const rows = json?.data?.diff;
+    if (!Array.isArray(rows) || rows.length === 0) break;
+
+    result.push(
+      ...rows.map((row: any) => ({
+        type,
+        code: String(row.f12 || ''),
+        name: String(row.f14 || ''),
+        price: toNumber(row.f2),
+        pct: toNumber(row.f3),
+        mainInflow: toNumber(row.f62),
+        upCount: toNumber(row.f104),
+        downCount: toNumber(row.f105),
+        leadStock: String(row.f128 || '')
+      }))
+    );
+
+    const total = Number(json?.data?.total || 0);
+    if (total > 0 && result.length >= total) break;
+    if (rows.length < pageSize) break;
+  }
+
+  return result;
 }
 
 function parseKline(raw: string[]): FallbackKLine[] {
@@ -706,7 +719,8 @@ export async function getLatestTradeDate(): Promise<string> {
     );
   }
 
-  const fallback = await getTencentDailyKline('000001', 5);
+  // 用高流动性的沪市股票判断交易日，避免把 000001 误识别为深市个股。
+  const fallback = await getTencentDailyKline('600000', 5);
   const last = fallback.at(-1);
 
   if (!last?.date) {
