@@ -35,7 +35,7 @@ export async function ensureSourceSettings(): Promise<void> {
       await run(
         `INSERT INTO data_source_setting
           (source_id, enabled, priority, updated_at)
-         VALUES (?, ?, ?, current_timestamp)`,
+         VALUES (?, ?, ?, now())`,
         [
           source.id,
           source.defaultEnabled,
@@ -123,11 +123,11 @@ export async function saveSourceSettings(
       await run(
         `INSERT INTO data_source_setting
           (source_id, enabled, priority, updated_at)
-         VALUES (?, ?, ?, current_timestamp)
+         VALUES (?, ?, ?, now())
          ON CONFLICT (source_id) DO UPDATE SET
            enabled = excluded.enabled,
            priority = excluded.priority,
-           updated_at = current_timestamp`,
+           updated_at = now()`,
         [
           item.id,
           !!item.enabled,
@@ -229,7 +229,7 @@ export async function recordSourceResult(
       last_success_at,
       last_failure_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
     ON CONFLICT (source_id) DO UPDATE SET
       last_status = excluded.last_status,
       last_capability = excluded.last_capability,
@@ -239,7 +239,7 @@ export async function recordSourceResult(
       last_test_at = COALESCE(excluded.last_test_at, data_source_status.last_test_at),
       last_success_at = COALESCE(excluded.last_success_at, data_source_status.last_success_at),
       last_failure_at = COALESCE(excluded.last_failure_at, data_source_status.last_failure_at),
-      updated_at = current_timestamp`,
+      updated_at = now()`,
     [
       source,
       values.status,
