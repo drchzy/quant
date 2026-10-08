@@ -405,7 +405,11 @@ async function evaluatePlan(row: any, live: LiveStock) {
   const entryPrice = number(row.entry_price);
   let holdDays = Math.max(number(row.hold_days), 1);
 
-  if (entryDate && dateText(row.last_seen_date) !== marketDate) {
+  if (
+    entryDate &&
+    marketDate > entryDate &&
+    dateText(row.last_seen_date) !== marketDate
+  ) {
     holdDays += 1;
   }
 
@@ -672,6 +676,8 @@ export async function confirmBuy(
       signal_reason = '已手工确认买入，开始持仓监控',
       entry_date = CAST(? AS DATE),
       entry_time = ?,
+      last_seen_date = CAST(? AS DATE),
+      last_market_time = ?,
       entry_price = ?,
       quantity = ?,
       highest_price = ?,
@@ -680,6 +686,8 @@ export async function confirmBuy(
       updated_at = current_timestamp
      WHERE id = ?`,
     [
+      entryDate,
+      marketTime,
       entryDate,
       marketTime,
       entryPrice,
@@ -722,6 +730,14 @@ export async function confirmSell(
 
   if (entryDate && currentDate <= entryDate) {
     throw new Error('A股T+1：买入当日不能确认卖出');
+  }
+
+  const lastMarketDate = row.last_market_time
+    ? String(row.last_market_time).slice(0, 10)
+    : null;
+
+  if (lastMarketDate !== currentDate) {
+    throw new Error('当前没有今日交易行情，不能确认卖出');
   }
 
   const livePrice = nullableNumber(row.current_price);
