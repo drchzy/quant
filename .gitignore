@@ -3,6 +3,9 @@ dist/
 .env
 *.log
 data/
+web/data/*
+!web/data/.gitkeep
+!web/.env
 .DS_Store
 .idea/
 .vscode/
