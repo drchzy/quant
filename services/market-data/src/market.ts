@@ -184,6 +184,7 @@ async function getStoredMarketRows(): Promise<MarketStock[]> {
 async function getLiveIndexes(signal?: AbortSignal) {
   const enabled = await getEnabledSources('index');
   const quotes = new Map<string, IndexQuote>();
+  const origins = new Map<string, DataSourceId>();
   const errors: string[] = [];
   for (const source of enabled) {
     if (signal?.aborted) throw new DOMException('同步任务已取消', 'AbortError');
@@ -195,6 +196,7 @@ async function getLiveIndexes(signal?: AbortSignal) {
         const quote = result.get(item.code);
         if (quote && quote.price > 0 && Number.isFinite(quote.pct)) {
           quotes.set(item.code, quote);
+          origins.set(item.code, source);
         }
       }
       if (result.size === 0) errors.push(source + ': 指数数据为空');
@@ -228,7 +230,10 @@ async function getLiveIndexes(signal?: AbortSignal) {
   }
   const stored = await getStoredIndexes();
   return {
-    indexes: stored,
+    indexes: stored.map((item) => ({
+      ...item,
+      quote: item.quote ? { ...item.quote, source: origins.get(item.code) || 'duckdb' } : null
+    })),
     missing: mainIndexes.filter((item) => !quotes.has(item.code)).map((item) => item.name),
     errors
   };
