@@ -2,11 +2,40 @@ name: CI
 
 on:
   workflow_dispatch:
+
+  # 只有会影响程序运行或镜像内容的文件变化，才执行完整构建。
   push:
     branches:
       - main
       - "feat/**"
+    paths:
+      - "services/**"
+      - "apps/**"
+      - "docker/**"
+      - "web/docker-compose.yml"
+      - "web/.env"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "package.json"
+      - "package-lock.json"
+      - "npm-shrinkwrap.json"
+      - ".github/workflows/ci.yml"
+
   pull_request:
+    paths:
+      - "services/**"
+      - "apps/**"
+      - "docker/**"
+      - "web/docker-compose.yml"
+      - "web/.env"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "package.json"
+      - "package-lock.json"
+      - "npm-shrinkwrap.json"
+      - ".github/workflows/ci.yml"
 
 jobs:
   build:
