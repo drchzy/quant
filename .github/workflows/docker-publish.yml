@@ -42,6 +42,25 @@ jobs:
           tags: ${{ steps.market_meta.outputs.tags }}
           labels: ${{ steps.market_meta.outputs.labels }}
 
+      - name: 生成 stock-select 标签
+        id: select_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/quant-stock-select
+          tags: |
+            type=raw,value=latest
+            type=ref,event=tag
+            type=sha
+
+      - name: 发布 stock-select
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/stock-select/Dockerfile
+          push: true
+          tags: ${{ steps.select_meta.outputs.tags }}
+          labels: ${{ steps.select_meta.outputs.labels }}
+
       - name: 生成 Web 标签
         id: web_meta
         uses: docker/metadata-action@v5
