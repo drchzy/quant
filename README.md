@@ -2,7 +2,7 @@
 
 本地 A 股行情与量化研究平台。
 
-当前已完成三层核心能力：**market-data 行情层** + **stock-select 超短趋势选股层** + **策略复盘/回测层**。
+当前已完成完整闭环：**market-data 行情层** + **stock-select 选股/复盘/回测层** + **trade-manager 持仓/盘中执行层**。
 
 ## 目录
 
@@ -10,7 +10,8 @@
 quant/
 ├─ services/
 │  ├─ market-data/       # 行情采集、DuckDB、REST API、定时同步
-│  └─ stock-select/      # 超短趋势选股、评分、次日计划
+│  ├─ stock-select/      # 超短趋势选股、评分、复盘、回测
+│  └─ trade-manager/     # 持仓、盘中监控、执行状态、T+1约束
 ├─ apps/
 │  └─ web/               # 本地行情与管理页面
 ├─ docs/
@@ -47,6 +48,11 @@ quant/
 - 候选次日表现自动复盘
 - 胜率、盈亏比、最大回撤统计
 - 历史参数回测与止盈止损参数建议
+- 次日重点候选盘中每分钟监控
+- 已有持仓手工录入
+- 买入/卖出成交手工确认
+- A股T+1卖出限制
+- 移动止盈、止损、时间退出实时状态
 
 ## Docker Compose 启动
 
@@ -66,6 +72,7 @@ DuckDB 数据保存在：
 ```text
 ./data/market.duckdb   # 行情数据
 ./data/select.duckdb   # 选股、复盘、回测数据
+./data/trade.duckdb    # 交易计划、持仓、状态变化和交易记录
 ```
 
 ## 本地开发
@@ -80,6 +87,9 @@ npm run dev:market-data
 
 # 选股服务
 npm run dev:stock-select
+
+# 持仓与盘中执行
+npm run dev:trade-manager
 
 # 前端
 npm run dev:web
@@ -139,6 +149,17 @@ POST /api/v1/select/backtest
 GET  /api/v1/select/backtests/latest
 ```
 
+盘中执行：
+
+```text
+GET  /api/v1/trading/today
+POST /api/v1/trading/refresh
+POST /api/v1/trading/plans/:id/buy
+POST /api/v1/trading/plans/:id/sell
+POST /api/v1/trading/positions
+GET  /api/v1/trading/ai
+```
+
 详细设计见：
 
 ```text
@@ -165,14 +186,19 @@ docs/architecture.md
 ```text
 <DOCKERHUB_USERNAME>/quant-market-data
 <DOCKERHUB_USERNAME>/quant-stock-select
+<DOCKERHUB_USERNAME>/quant-trade-manager
 <DOCKERHUB_USERNAME>/quant-web
 ```
 
 ## 默认执行时间
 
 ```text
+09:30-11:30 / 13:00-15:00
+       trade-manager 每分钟检查重点候选和持仓
+
 16:10  同步当天全市场行情
 16:40  先复盘历史候选，再自动运行超短趋势选股
+16:45  trade-manager 同步明日重点3只执行计划
 ```
 
 选股策略详细说明：
@@ -180,3 +206,14 @@ docs/architecture.md
 ```text
 docs/stock-select.md
 ```
+
+
+## 执行原则
+
+trade-manager **不会自动下单**。
+
+进入买入区后只产生“可买”提示，用户实际成交后需要点击“确认买入”；触发止损、止盈或移动止盈时只产生“可卖”提示，实际卖出后点击“确认卖出”。
+
+A股普通股票按 T+1 处理：当天确认买入的仓位，当天即使触发止损/止盈，也只提示 `T+1锁定风险`，不会显示为可执行卖出。
+
+节假日或停牌时，如果东方财富分时数据不是当天日期，trade-manager 不改变计划状态，也不会把计划误判为过期。
