@@ -1,9 +1,15 @@
 import { all, one, run } from './database.js';
+import { config } from './config.js';
 import { calculateIndicators } from './indicator.js';
 import {
   buildSecid,
-  eastmoney,
+  getBatchQuotes,
+  getDailyKline,
+  getIntradayTrend,
+  getMarketDataSourceStatus,
   getMarketStocks,
+  getMinuteKline,
+  getQuote,
   getSectors,
   mainIndexes
 } from './eastmoney.js';
@@ -12,35 +18,72 @@ import type { MarketStock, SectorType } from './types.js';
 let marketCache:
   | { time: number; data: MarketStock[] }
   | null = null;
+let marketInflight: Promise<MarketStock[]> | null = null;
 
 const sectorCache = new Map<
   SectorType,
   { time: number; data: Awaited<ReturnType<typeof getSectors>> }
 >();
+const sectorInflight = new Map<
+  SectorType,
+  Promise<Awaited<ReturnType<typeof getSectors>>>
+>();
 
 async function getLiveMarket(): Promise<MarketStock[]> {
   const now = Date.now();
 
-  if (marketCache && now - marketCache.time < 15_000) {
+  if (
+    marketCache &&
+    now - marketCache.time < config.marketCacheTtlMs
+  ) {
     return marketCache.data;
   }
 
-  const data = await getMarketStocks();
-  marketCache = { time: now, data };
-  return data;
+  if (marketInflight) return marketInflight;
+
+  marketInflight = getMarketStocks()
+    .then((data) => {
+      marketCache = {
+        time: Date.now(),
+        data
+      };
+      return data;
+    })
+    .finally(() => {
+      marketInflight = null;
+    });
+
+  return marketInflight;
 }
 
 async function getLiveSectors(type: SectorType) {
   const now = Date.now();
   const cached = sectorCache.get(type);
 
-  if (cached && now - cached.time < 30_000) {
+  if (
+    cached &&
+    now - cached.time < config.sectorCacheTtlMs
+  ) {
     return cached.data;
   }
 
-  const data = await getSectors(type);
-  sectorCache.set(type, { time: now, data });
-  return data;
+  const running = sectorInflight.get(type);
+  if (running) return running;
+
+  const task = getSectors(type)
+    .then((data) => {
+      sectorCache.set(type, {
+        time: Date.now(),
+        data
+      });
+      return data;
+    })
+    .finally(() => {
+      sectorInflight.delete(type);
+    });
+
+  sectorInflight.set(type, task);
+  return task;
 }
 
 function buildBreadth(rows: MarketStock[]) {
@@ -66,71 +109,148 @@ function buildBreadth(rows: MarketStock[]) {
  * 市场总览同时给页面和 AI 使用。
  * live=true 时直接获取当前东财数据，避免依赖数据库里上一次同步结果。
  */
+async function getStoredMarketRows(): Promise<MarketStock[]> {
+  return all<MarketStock>(`
+    SELECT
+      s.code,
+      s.name,
+      s.market,
+      d.close AS price,
+      d.pct,
+      d.change,
+      d.volume,
+      d.amount,
+      d.amplitude,
+      d.turnover,
+      d.pe,
+      d.volume_ratio AS volumeRatio,
+      d.high,
+      d.low,
+      d.open,
+      d.pre_close AS preClose,
+      d.total_market_cap AS totalMarketCap,
+      d.float_market_cap AS floatMarketCap,
+      d.pb
+    FROM daily_price d
+    JOIN stock s ON s.code = d.code
+    WHERE d.trade_date = (
+      SELECT MAX(trade_date) FROM daily_price
+    )
+  `);
+}
+
+async function getStoredIndexes() {
+  const rows = await all<any>(
+    'SELECT * FROM market_index ORDER BY code'
+  );
+  const map = new Map(
+    rows.map((row) => [String(row.code), row])
+  );
+
+  return mainIndexes.map((item) => ({
+    ...item,
+    quote: map.get(item.code) || null
+  }));
+}
+
+async function getStoredSectors(type: SectorType) {
+  return all<any>(
+    `SELECT * FROM sector
+     WHERE type = ?
+     ORDER BY pct DESC`,
+    [type]
+  );
+}
+
+/**
+ * 市场总览优先实时源；实时源被风控时自动回退 DuckDB。
+ * 页面因此不会因为东财临时断连接直接返回 500。
+ */
 export async function getMarketOverview(live = true) {
-  let marketRows: MarketStock[];
+  let degraded = false;
+  const warnings: string[] = [];
+
+  let marketRows: MarketStock[] = [];
+  let indexes: any[] = [];
+  let industry: any[] = [];
+  let concept: any[] = [];
 
   if (live) {
-    marketRows = await getLiveMarket();
-  } else {
-    marketRows = await all<MarketStock>(`
-      SELECT
-        s.code,
-        s.name,
-        s.market,
-        d.close AS price,
-        d.pct,
-        d.change,
-        d.volume,
-        d.amount,
-        d.amplitude,
-        d.turnover,
-        d.pe,
-        d.volume_ratio AS volumeRatio,
-        d.high,
-        d.low,
-        d.open,
-        d.pre_close AS preClose,
-        d.total_market_cap AS totalMarketCap,
-        d.float_market_cap AS floatMarketCap,
-        d.pb
-      FROM daily_price d
-      JOIN stock s ON s.code = d.code
-      WHERE d.trade_date = (SELECT MAX(trade_date) FROM daily_price)
-    `);
-  }
+    try {
+      marketRows = await getLiveMarket();
+    } catch (error) {
+      degraded = true;
+      warnings.push(
+        `全市场实时行情不可用，已回退本地数据：${error instanceof Error ? error.message : String(error)}`
+      );
+      marketRows = await getStoredMarketRows();
+    }
 
-  const indexes = live
-    ? await Promise.all(
-        mainIndexes.map(async (item) => ({
-          ...item,
-          quote: await eastmoney.quote(item.secid)
-        }))
-      )
-    : await all<any>('SELECT * FROM market_index ORDER BY code');
+    try {
+      const quotes = await getBatchQuotes(
+        mainIndexes.map((item) => item.secid)
+      );
+      indexes = mainIndexes.map((item) => ({
+        ...item,
+        quote: quotes.get(item.code) || null
+      }));
+    } catch (error) {
+      degraded = true;
+      warnings.push('指数实时行情不可用，已回退本地数据');
+      indexes = await getStoredIndexes();
+    }
 
-  const [industry, concept] = live
-    ? await Promise.all([
+    const [industryResult, conceptResult] =
+      await Promise.allSettled([
         getLiveSectors('industry'),
         getLiveSectors('concept')
-      ])
-    : await Promise.all([
-        all<any>(
-          `SELECT * FROM sector WHERE type = 'industry' ORDER BY pct DESC`
-        ),
-        all<any>(
-          `SELECT * FROM sector WHERE type = 'concept' ORDER BY pct DESC`
-        )
       ]);
 
+    if (industryResult.status === 'fulfilled') {
+      industry = industryResult.value;
+    } else {
+      degraded = true;
+      warnings.push('行业板块实时行情不可用，已回退本地数据');
+      industry = await getStoredSectors('industry');
+    }
+
+    if (conceptResult.status === 'fulfilled') {
+      concept = conceptResult.value;
+    } else {
+      degraded = true;
+      warnings.push('概念板块实时行情不可用，已回退本地数据');
+      concept = await getStoredSectors('concept');
+    }
+  } else {
+    [
+      marketRows,
+      indexes,
+      industry,
+      concept
+    ] = await Promise.all([
+      getStoredMarketRows(),
+      getStoredIndexes(),
+      getStoredSectors('industry'),
+      getStoredSectors('concept')
+    ]);
+  }
+
   const sortDesc = (rows: any[]) =>
-    [...rows].sort((a, b) => Number(b.pct || 0) - Number(a.pct || 0));
+    [...rows].sort(
+      (a, b) => Number(b.pct || 0) - Number(a.pct || 0)
+    );
 
   const sortAsc = (rows: any[]) =>
-    [...rows].sort((a, b) => Number(a.pct || 0) - Number(b.pct || 0));
+    [...rows].sort(
+      (a, b) => Number(a.pct || 0) - Number(b.pct || 0)
+    );
 
   return {
     updatedAt: new Date().toISOString(),
-    live,
+    live: live && !degraded,
+    degraded,
+    warnings,
+    sourceStatus: getMarketDataSourceStatus(),
     breadth: buildBreadth(marketRows),
     indexes,
     sectors: {
@@ -264,15 +384,15 @@ export async function getDaily(
   refresh = false
 ) {
   if (refresh) {
-    const rows = await eastmoney.dailyKline(buildSecid(code), days, 1);
+    const result = await getDailyKline(code, days, 1);
 
-    for (const item of rows) {
+    for (const item of result.data) {
       await run(
         `INSERT OR REPLACE INTO daily_price (
           code, trade_date, open, close, high, low,
           volume, amount, pct, change, amplitude, turnover,
           source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'eastmoney-kline', current_timestamp)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
         [
           code,
           item.date.slice(0, 10),
@@ -285,7 +405,8 @@ export async function getDaily(
           item.pct,
           item.change,
           item.amplitude,
-          item.turnover
+          item.turnover,
+          result.source
         ]
       );
     }
@@ -316,18 +437,18 @@ export async function getMinute(
   refresh = true
 ) {
   if (refresh) {
-    const rows = await eastmoney.minuteKline(
-      buildSecid(code),
+    const result = await getMinuteKline(
+      code,
       period as 1 | 5 | 15 | 30 | 60,
       limit
     );
 
-    for (const item of rows) {
+    for (const item of result.data) {
       await run(
         `INSERT OR REPLACE INTO minute_price (
           code, period, trade_time, open, close, high, low,
           volume, amount, pct, change, turnover, source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'eastmoney', current_timestamp)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
         [
           code,
           period,
@@ -340,7 +461,8 @@ export async function getMinute(
           item.amount,
           item.pct,
           item.change,
-          item.turnover
+          item.turnover,
+          result.source
         ]
       );
     }
@@ -663,23 +785,99 @@ export async function getSectorList(
 /**
  * AI 个股接口一次返回常用上下文，减少 AI 连续请求多个底层接口。
  */
+export async function getStockQuote(code: string) {
+  try {
+    return {
+      source: 'eastmoney',
+      degraded: false,
+      data: await getQuote(buildSecid(code))
+    };
+  } catch (error) {
+    const stock = await getStock(code);
+
+    return {
+      source: 'duckdb',
+      degraded: true,
+      error:
+        error instanceof Error ? error.message : String(error),
+      data: stock
+        ? {
+            code,
+            name: stock.name,
+            price: Number(stock.close || 0),
+            high: Number(stock.high || 0),
+            low: Number(stock.low || 0),
+            open: Number(stock.open || 0),
+            preClose: Number(stock.pre_close || 0),
+            volume: Number(stock.volume || 0),
+            amount: Number(stock.amount || 0),
+            pct: Number(stock.pct || 0),
+            change: Number(stock.change || 0),
+            turnover: stock.turnover,
+            totalMarketCap: stock.total_market_cap,
+            floatMarketCap: stock.float_market_cap,
+            pe: stock.pe,
+            pb: stock.pb
+          }
+        : null
+    };
+  }
+}
+
+export async function getStockIntraday(code: string) {
+  try {
+    const data = await getIntradayTrend(buildSecid(code));
+
+    if (data.length > 0) {
+      return {
+        source: 'eastmoney',
+        degraded: false,
+        data
+      };
+    }
+  } catch {
+    // 继续走分钟K备用源。
+  }
+
+  const minute = await getMinute(code, 1, 240, true);
+
+  return {
+    source: 'minute-kline-fallback',
+    degraded: true,
+    data: minute.map((row: any) => ({
+      datetime: String(row.trade_time),
+      time: String(row.trade_time).slice(11, 16),
+      price: Number(row.close || 0),
+      avgPrice: Number(row.close || 0),
+      volume: Number(row.volume || 0),
+      amount: Number(row.amount || 0),
+      pct: Number(row.pct || 0)
+    }))
+  };
+}
+
 export async function getAiStock(code: string) {
-  const [stock, quote, daily, minute, intraday] = await Promise.all([
-    getStock(code),
-    eastmoney.quote(buildSecid(code)),
-    getDaily(code, 120, false),
-    getMinute(code, 1, 240, true),
-    eastmoney.intradayTrend(buildSecid(code))
-  ]);
+  const [stock, quoteResult, daily, minute, intradayResult] =
+    await Promise.all([
+      getStock(code),
+      getStockQuote(code),
+      getDaily(code, 120, false),
+      getMinute(code, 1, 240, true),
+      getStockIntraday(code)
+    ]);
 
   return {
     code,
     stock,
-    quote,
+    quote: quoteResult.data,
+    quoteSource: quoteResult.source,
+    intradaySource: intradayResult.source,
+    degraded:
+      quoteResult.degraded || intradayResult.degraded,
     indicators: calculateIndicators(daily as any),
     daily,
     minute,
-    intraday,
+    intraday: intradayResult.data,
     generatedAt: new Date().toISOString()
   };
 }
