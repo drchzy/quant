@@ -404,7 +404,7 @@ export async function getTechnicalStocks(days = 30, tradeDate?: string) {
          s.code,
          s.name,
          s.market_name,
-         d.trade_date,
+         d.trade_date::VARCHAR AS trade_date,
          d.open,
          d.close,
          d.high,
@@ -592,7 +592,7 @@ export async function getFuturePrices(
     `WITH future AS (
        SELECT
          d.code,
-         d.trade_date,
+         d.trade_date::VARCHAR AS trade_date,
          d.open,
          d.close,
          d.high,
