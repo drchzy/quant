@@ -7,6 +7,7 @@ import {
   getSectorList,
   getStock,
   getStockList,
+  getTechnicalStocks,
   searchStocks
 } from './market.js';
 import {
@@ -45,6 +46,16 @@ export async function registerRoutes(
       sort: query.sort,
       order: query.order === 'asc' ? 'asc' : 'desc'
     });
+  });
+
+  app.get('/api/v1/market/technical', async (request) => {
+    const query = request.query as { days?: string };
+    const days = Math.min(
+      Math.max(Number(query.days || 30), 21),
+      120
+    );
+
+    return getTechnicalStocks(days);
   });
 
   app.get('/api/v1/sectors', async (request, reply) => {
