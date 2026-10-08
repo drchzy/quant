@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { getSourceSettings } from './source-manager.js';
 import {
   getTencentDailyKline,
   getTencentMinuteKline,
@@ -136,7 +137,12 @@ async function requestJson(
   bases: string[],
   path: string,
   params: URLSearchParams
-): Promise<any> {
+ ): Promise<any> {
+  const settings = await getSourceSettings();
+  if (!settings.some((item) => item.id === 'eastmoney_push2' && item.enabled)) {
+    throw new Error('东方财富 Push2 已禁用，跳过外部请求');
+  }
+
   let lastError: unknown;
 
   for (const base of bases) {
