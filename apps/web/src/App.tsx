@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiGet, apiPost, formatMoney, formatPct } from './api';
+import { apiGet, apiPost, apiPut, formatMoney, formatPct } from './api';
 import { DailyChart, MinuteChart } from './charts';
 
 type Page = 'market' | 'stock' | 'sector' | 'select' | 'trading' | 'review' | 'sync';
@@ -1304,16 +1304,40 @@ function TradingPage() {
 
 function SyncPage() {
   const [jobs, setJobs] = useState<any[]>([]);
+  const [sources, setSources] = useState<any[]>([]);
   const [days, setDays] = useState(120);
   const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [testing, setTesting] = useState('');
+  const [stopping, setStopping] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const capabilityText: Record<string, string> = {
+    snapshot: '全市场',
+    daily: '日K',
+    minute: '分钟K',
+    sector: '板块'
+  };
+
+  const sourceName = (id: string) =>
+    sources.find((item) => item.id === id)?.name || id;
 
   const loadJobs = async () => {
-    const result = await apiGet<any>('/sync/jobs?limit=30');
-    setJobs(result.data || []);
+    try {
+      const result = await apiGet<any>('/sync/jobs?limit=30');
+      setJobs(result.data || []);
+    } catch {
+      // 任务轮询失败时保留页面当前内容。
+    }
+  };
+
+  const loadSources = async () => {
+    const result = await apiGet<any>('/data-sources');
+    setSources(result.data || []);
   };
 
   useEffect(() => {
-    void loadJobs();
+    void Promise.all([loadJobs(), loadSources()]);
 
     const timer = window.setInterval(
       () => void loadJobs(),
@@ -1323,28 +1347,306 @@ function SyncPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const selectedSources = sources
+    .filter((item) => item.enabled)
+    .sort((a, b) => Number(a.priority) - Number(b.priority))
+    .map((item) => item.id);
+
+  const toggleSource = (id: string) => {
+    setSources((current) =>
+      current.map((item) =>
+        item.id === id
+          ? { ...item, enabled: !item.enabled }
+          : item
+      )
+    );
+  };
+
+  const moveSource = (id: string, direction: -1 | 1) => {
+    setSources((current) => {
+      const ordered = [...current].sort(
+        (a, b) => Number(a.priority) - Number(b.priority)
+      );
+      const index = ordered.findIndex((item) => item.id === id);
+      const target = index + direction;
+
+      if (index < 0 || target < 0 || target >= ordered.length) {
+        return current;
+      }
+
+      const currentItem = ordered[index];
+      ordered[index] = ordered[target];
+      ordered[target] = currentItem;
+
+      return ordered.map((item, order) => ({
+        ...item,
+        priority: (order + 1) * 10
+      }));
+    });
+  };
+
+  const saveSources = async () => {
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const ordered = [...sources].sort(
+        (a, b) => Number(a.priority) - Number(b.priority)
+      );
+
+      const result = await apiPut<any>('/data-sources', {
+        sources: ordered.map((item, index) => ({
+          id: item.id,
+          enabled: !!item.enabled,
+          priority: (index + 1) * 10
+        }))
+      });
+
+      setSources(result.data || []);
+      setMessage('数据源选择和优先级已保存');
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testOneSource = async (id: string) => {
+    setTesting(id);
+    setError('');
+    setMessage('');
+
+    try {
+      const result = await apiPost<any>('/data-sources/test', {
+        source: id
+      });
+
+      setMessage(
+        result.sourceName +
+          ' 测试成功：' +
+          result.message +
+          '，延迟 ' +
+          result.latencyMs +
+          'ms'
+      );
+      await loadSources();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+      await loadSources();
+    } finally {
+      setTesting('');
+    }
+  };
+
   const start = async (
     path: string,
-    body: unknown = {}
+    body: Record<string, unknown> = {}
   ) => {
-    await apiPost(path, body);
-    setMessage('任务已提交');
-    await loadJobs();
+    if (selectedSources.length === 0) {
+      setError('请至少勾选一个数据源');
+      return;
+    }
+
+    setError('');
+    setMessage('');
+
+    try {
+      await saveSources();
+      await apiPost(path, {
+        ...body,
+        sources: selectedSources
+      });
+
+      setMessage(
+        '任务已提交，数据源顺序：' +
+          selectedSources.map(sourceName).join(' → ')
+      );
+      await loadJobs();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   };
+
+  const stopAll = async () => {
+    setStopping(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const result = await apiPost<any>('/sync/stop-all');
+      setMessage(
+        '已发送停止指令，取消 ' +
+          String(result.stopped || 0) +
+          ' 个排队或运行任务'
+      );
+      await loadJobs();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const orderedSources = [...sources].sort(
+    (a, b) => Number(a.priority) - Number(b.priority)
+  );
 
   return (
     <>
       <div className="page-title">
         <div>
           <h2>数据同步</h2>
-          <p>管理每日增量、板块数据和历史日 K</p>
+          <p>测试数据源、选择同步源、调整优先级，并管理同步任务</p>
         </div>
+        <button
+          className="stop-all-button"
+          disabled={stopping}
+          onClick={() => void stopAll()}
+        >
+          {stopping ? '正在停止…' : '停止全部同步'}
+        </button>
       </div>
+
+      {message && <div className="notice">{message}</div>}
+      {error && <div className="error">{error}</div>}
+
+      <section className="panel">
+        <div className="panel-title-row">
+          <div>
+            <h3>数据源管理</h3>
+            <p>
+              勾选的数据源参与同步；多个数据源按从上到下顺序尝试，第一个成功后停止降级。
+            </p>
+          </div>
+          <button
+            className="primary-button"
+            disabled={saving}
+            onClick={() => void saveSources()}
+          >
+            {saving ? '正在保存…' : '保存数据源设置'}
+          </button>
+        </div>
+
+        <div className="source-list">
+          {orderedSources.map((source, index) => (
+            <div
+              className={
+                'source-card ' +
+                (!source.available ? 'source-unavailable' : '')
+              }
+              key={source.id}
+            >
+              <div className="source-order">
+                <b>{index + 1}</b>
+                <div>
+                  <button
+                    title="上移"
+                    disabled={index === 0}
+                    onClick={() => moveSource(source.id, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    title="下移"
+                    disabled={index === orderedSources.length - 1}
+                    onClick={() => moveSource(source.id, 1)}
+                  >
+                    ↓
+                  </button>
+                </div>
+              </div>
+
+              <label className="source-check">
+                <input
+                  type="checkbox"
+                  checked={!!source.enabled}
+                  disabled={!source.available}
+                  onChange={() => toggleSource(source.id)}
+                />
+                <span>
+                  <b>{source.name}</b>
+                  <small>{source.id}</small>
+                </span>
+              </label>
+
+              <div className="source-description">
+                <p>{source.description}</p>
+                <div className="source-tags">
+                  {(source.capabilities || []).map(
+                    (capability: string) => (
+                      <span key={capability}>
+                        {capabilityText[capability] || capability}
+                      </span>
+                    )
+                  )}
+                  <span>
+                    {source.independent ? '独立源' : '东财系'}
+                  </span>
+                  {source.needsToken && <span>需要 Token</span>}
+                </div>
+              </div>
+
+              <div className="source-status">
+                {!source.available ? (
+                  <span className="status-bad">未配置 Token</span>
+                ) : source.status?.lastStatus === 'success' ? (
+                  <>
+                    <span className="status-good">最近成功</span>
+                    <small>
+                      {source.status.lastLatencyMs == null
+                        ? ''
+                        : String(Math.round(source.status.lastLatencyMs)) +
+                          'ms'}
+                    </small>
+                  </>
+                ) : source.status?.lastStatus ? (
+                  <>
+                    <span className="status-bad">
+                      {source.status.lastStatus}
+                    </span>
+                    <small>{source.status.lastMessage}</small>
+                  </>
+                ) : (
+                  <span className="muted-text">尚未测试</span>
+                )}
+              </div>
+
+              <button
+                className="source-test-button"
+                disabled={
+                  !source.available || testing === source.id
+                }
+                onClick={() => void testOneSource(source.id)}
+              >
+                {testing === source.id ? '测试中…' : '请求测试'}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="source-chain">
+          <b>当前同步顺序：</b>
+          {selectedSources.length > 0
+            ? selectedSources.map(sourceName).join(' → ')
+            : '未选择数据源'}
+        </div>
+      </section>
 
       <div className="action-grid">
         <div className="card action-card">
           <h3>同步今日市场</h3>
-          <p>分页获取全 A 股当天行情并写入 DuckDB。</p>
+          <p>
+            使用支持“全市场”的已选数据源，按优先级自动降级并写入 DuckDB。
+          </p>
           <button onClick={() => void start('/sync/daily')}>
             开始同步
           </button>
@@ -1352,7 +1654,9 @@ function SyncPage() {
 
         <div className="card action-card">
           <h3>同步板块</h3>
-          <p>更新行业和概念板块排名。</p>
+          <p>
+            自动从已选数据源中筛出支持板块的来源；当前东财行情提供完整行业/概念板块。
+          </p>
           <button onClick={() => void start('/sync/sectors')}>
             开始同步
           </button>
@@ -1360,7 +1664,9 @@ function SyncPage() {
 
         <div className="card action-card">
           <h3>初始化历史日 K</h3>
-          <p>首次使用执行，全市场逐只同步，耗时较长。</p>
+          <p>
+            每只股票都按已选来源顺序尝试，例如腾讯 → 东财历史 → Tushare。
+          </p>
           <div className="row">
             <input
               type="number"
@@ -1382,8 +1688,6 @@ function SyncPage() {
         </div>
       </div>
 
-      {message && <div className="notice">{message}</div>}
-
       <section className="panel">
         <h3>任务记录</h3>
         <table>
@@ -1392,6 +1696,7 @@ function SyncPage() {
               <th>类型</th>
               <th>状态</th>
               <th>进度</th>
+              <th>数据源执行情况</th>
               <th>说明</th>
               <th>开始时间</th>
             </tr>
@@ -1400,9 +1705,28 @@ function SyncPage() {
             {jobs.map((job) => (
               <tr key={job.id}>
                 <td>{job.job_type}</td>
-                <td>{job.status}</td>
+                <td>
+                  <span className={'job-status job-' + job.status}>
+                    {job.status}
+                  </span>
+                </td>
                 <td>{job.done}/{job.total}</td>
-                <td>{job.message}</td>
+                <td className="source-job-cell">
+                  {(job.sources || []).length === 0
+                    ? '-'
+                    : job.sources.map((source: any) => (
+                        <span
+                          className={
+                            'source-job source-job-' + source.status
+                          }
+                          key={source.source_id}
+                          title={source.message || ''}
+                        >
+                          {sourceName(source.source_id)}：{source.status}
+                        </span>
+                      ))}
+                </td>
+                <td className="reason-cell">{job.message}</td>
                 <td>
                   {String(job.started_at || '')
                     .replace('T', ' ')
@@ -1416,6 +1740,7 @@ function SyncPage() {
     </>
   );
 }
+
 
 export default function App() {
   const [page, setPage] = useState<Page>('market');
