@@ -3,7 +3,7 @@
 Quant 默认提供 **All-in-One 单镜像**：
 
 ```text
-__DOCKERHUB_USERNAME__/quant:latest
+__DOCKERHUB_USERNAME__/quant:0.4.0-build.<构建号>
 ```
 
 镜像架构：
@@ -53,7 +53,7 @@ docker run -d \
   --restart unless-stopped \
   -p 8088:8088 \
   -v "$PWD/web:/app/web" \
-  __DOCKERHUB_USERNAME__/quant:latest
+  __DOCKERHUB_USERNAME__/quant:0.4.0-build.<构建号>
 ```
 
 第一次启动后会自动生成：
@@ -204,7 +204,7 @@ tar -czf quant-backup.tar.gz web/
 ## 更新
 
 ```bash
-docker pull __DOCKERHUB_USERNAME__/quant:latest
+docker pull __DOCKERHUB_USERNAME__/quant:0.4.0-build.<构建号>
 docker restart quant
 ```
 
@@ -230,3 +230,33 @@ http://服务器IP:8088/health
 ```text
 https://github.com/drchzy/quant
 ```
+
+
+## 镜像版本规则
+
+从 0.4.0 开始，每次 GitHub Actions 发布都会生成新的不可变版本标签：
+
+```text
+<基础版本>-build.<GitHub构建号>
+```
+
+例如：
+
+```text
+0.4.0-build.120
+0.4.0-build.121
+0.4.0-build.122
+```
+
+同一次发布还会附带：
+
+```text
+latest
+sha-<commit>
+```
+
+推荐：
+
+- 正式环境固定使用 `0.4.0-build.xxx`，方便升级和回滚。
+- `latest` 只用于希望始终跟随最新版本的环境。
+- 每次发布都会产生新的版本号，不覆盖旧的版本标签。
