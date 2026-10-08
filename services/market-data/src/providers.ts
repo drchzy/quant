@@ -1381,6 +1381,37 @@ export async function fetchIndexesBySource(
 }
 
 /** 个股报价与指数同样按照启用 Provider 的能力和排序路由。 */
+/** 当且仅当 Push2 是选定的分钟能力首选源时使用专用分时。 */
+export async function fetchEastmoneyIntraday(
+  code: string,
+  signal?: AbortSignal
+): Promise<Array<{
+  datetime: string; time: string; price: number; avgPrice: number;
+  volume: number; amount: number; pct: number;
+}>> {
+  const secid = (/^(5|6|9)/.test(code) ? '1.' : '0.') + code;
+  const json = await eastmoneyJson('/api/qt/stock/trends2/get', new URLSearchParams({
+    secid, ndays: '1',
+    fields1: 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13',
+    fields2: 'f51,f52,f53,f54,f55,f56,f57,f58',
+    iscr: '0', iscca: '0'
+  }), signal);
+  const preClose = number(json?.data?.preClose);
+  const lines = json?.data?.trends || [];
+  if (!Array.isArray(lines)) return [];
+  return lines.map((line: string) => String(line).split(','))
+    .filter((row: string[]) => row.length >= 7)
+    .map((row: string[]) => {
+      const price = number(row[1] || row[2]);
+      return {
+        datetime: row[0], time: row[0].slice(11, 16),
+        price, avgPrice: number(row[2], price),
+        volume: number(row[5]), amount: number(row[6]),
+        pct: preClose > 0 ? (price - preClose) / preClose * 100 : 0
+      };
+    });
+}
+
 export async function fetchStockQuoteBySource(
   source: DataSourceId,
   code: string,
