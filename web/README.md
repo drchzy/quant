@@ -121,3 +121,26 @@ tar -czf quant-backup.tar.gz web/
 ```
 
 配置和三个 DuckDB 都在里面。
+
+
+## 固定镜像版本
+
+每次发布都会生成类似：
+
+```text
+drchzy/quant:0.4.0-build.123
+```
+
+生产环境建议把 `web/.env` 中：
+
+```env
+QUANT_IMAGE="drchzy/quant:latest"
+```
+
+改成实际版本，例如：
+
+```env
+QUANT_IMAGE="drchzy/quant:0.4.0-build.123"
+```
+
+这样更新、回滚都更明确。
