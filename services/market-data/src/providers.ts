@@ -116,6 +116,84 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+const sourceQueues = new Map<DataSourceId, Promise<void>>();
+const sourceLastStart = new Map<DataSourceId, number>();
+
+function sourceInterval(source: DataSourceId): number {
+  switch (source) {
+    case 'eastmoney_push2':
+    case 'eastmoney_datacenter':
+      return config.eastmoneyMinIntervalMs;
+    case 'tencent':
+      return config.fallbackMinIntervalMs;
+    case 'sina':
+      return 180;
+    case 'tushare':
+      return 350;
+  }
+}
+
+async function waitWithAbort(
+  ms: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (ms <= 0) return;
+  throwIfAborted(signal);
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('同步任务已取消', 'AbortError'));
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function withSourceLimit<T>(
+  source: DataSourceId,
+  signal: AbortSignal | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous =
+    sourceQueues.get(source) || Promise.resolve();
+
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  sourceQueues.set(source, current);
+
+  await previous;
+  throwIfAborted(signal);
+
+  const last = sourceLastStart.get(source) || 0;
+  const jitter =
+    source.startsWith('eastmoney')
+      ? Math.floor(Math.random() * 250)
+      : 0;
+  const wait = Math.max(
+    0,
+    sourceInterval(source) + jitter - (Date.now() - last)
+  );
+
+  try {
+    await waitWithAbort(wait, signal);
+    sourceLastStart.set(source, Date.now());
+    return await fn();
+  } finally {
+    release();
+    if (sourceQueues.get(source) === current) {
+      sourceQueues.delete(source);
+    }
+  }
+}
+
 async function fetchText(
   url: string,
   options: RequestInit,
@@ -184,16 +262,21 @@ async function fetchSinaPage(
     'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?' +
     params.toString();
 
-  const json = await fetchJson(
-    url,
-    {
-      headers: {
-        ...browserHeaders,
-        Referer: 'https://vip.stock.finance.sina.com.cn/mkt/'
-      }
-    },
+  const json = await withSourceLimit(
+    'sina',
     signal,
-    15_000
+    () =>
+      fetchJson(
+        url,
+        {
+          headers: {
+            ...browserHeaders,
+            Referer: 'https://vip.stock.finance.sina.com.cn/mkt/'
+          }
+        },
+        signal,
+        15_000
+      )
   );
 
   if (!Array.isArray(json)) {
@@ -263,16 +346,21 @@ async function fetchEastmoneyDataCenterPage(
     client: 'WEB'
   });
 
-  const json = await fetchJson(
-    'https://data.eastmoney.com/dataapi/xuangu/list?' + params.toString(),
-    {
-      headers: {
-        ...browserHeaders,
-        Referer: 'https://data.eastmoney.com/xuangu/'
-      }
-    },
+  const json = await withSourceLimit(
+    'eastmoney_datacenter',
     signal,
-    30_000
+    () =>
+      fetchJson(
+        'https://data.eastmoney.com/dataapi/xuangu/list?' + params.toString(),
+        {
+          headers: {
+            ...browserHeaders,
+            Referer: 'https://data.eastmoney.com/xuangu/'
+          }
+        },
+        signal,
+        30_000
+      )
   );
 
   if (!json?.success) {
@@ -351,16 +439,21 @@ async function eastmoneyJson(
 
   for (const base of bases) {
     try {
-      return await fetchJson(
-        `${base}${path}?${params.toString()}`,
-        {
-          headers: {
-            ...browserHeaders,
-            Referer: 'https://quote.eastmoney.com/',
-            Connection: 'close'
-          }
-        },
-        signal
+      return await withSourceLimit(
+        'eastmoney_push2',
+        signal,
+        () =>
+          fetchJson(
+            `${base}${path}?${params.toString()}`,
+            {
+              headers: {
+                ...browserHeaders,
+                Referer: 'https://quote.eastmoney.com/',
+                Connection: 'close'
+              }
+            },
+            signal
+          )
       );
     } catch (error) {
       lastError = error;
@@ -464,15 +557,20 @@ export async function fetchTencentDaily(
   let lastError: unknown;
   for (const endpoint of endpoints) {
     try {
-      const json = await fetchJson(
-        endpoint + '?' + params.toString(),
-        {
-          headers: {
-            ...browserHeaders,
-            Referer: 'https://gu.qq.com/'
-          }
-        },
-        signal
+      const json = await withSourceLimit(
+        'tencent',
+        signal,
+        () =>
+          fetchJson(
+            endpoint + '?' + params.toString(),
+            {
+              headers: {
+                ...browserHeaders,
+                Referer: 'https://gu.qq.com/'
+              }
+            },
+            signal
+          )
       );
       const stock = json?.data?.[symbol] || {};
       const raw = stock.qfqday || stock.day || [];
@@ -589,23 +687,28 @@ async function tushareCall(
     throw new Error('未配置 TUSHARE_TOKEN');
   }
 
-  const json = (await fetchJson(
-    'https://api.tushare.pro',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': browserHeaders['User-Agent']
-      },
-      body: JSON.stringify({
-        api_name: apiName,
-        token,
-        params,
-        fields: fields.join(',')
-      })
-    },
+  const json = (await withSourceLimit(
+    'tushare',
     signal,
-    30_000
+    () =>
+      fetchJson(
+        'https://api.tushare.pro',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': browserHeaders['User-Agent']
+          },
+          body: JSON.stringify({
+            api_name: apiName,
+            token,
+            params,
+            fields: fields.join(',')
+          })
+        },
+        signal,
+        30_000
+      )
   )) as TushareResponse;
 
   if (json.code !== 0) {
