@@ -217,6 +217,19 @@ var d=await upstream('live','/api/qt/stock/trends2/get',{secid:codeMarket(stock.
 var pre=n(d.preClose);var rows=(d.trends||[]).map(function(line){var a=String(line).split(',');var date=safeDate(a[0]);var price=n(a[1])||n(a[2]);return {code:stock.code,name:stock.name,tradeTime:a[0],price:price,avgPrice:n(a[2]),volume:n(a[5]),amount:n(a[6]),pct:pre>0&&price!==null?(price-pre)/pre*100:null,date:date};}).filter(function(x){return x.price!==null&&x.date>=cfg.from&&x.date<=cfg.to;});
 if(rows.length)await push('intraday',rows,cfg);log(stock.code+' 分时 '+rows.length+' 条（上游通常仅保留最近几天）');
 }
+async function selectedSnapshot(stock,cfg){
+var d=await upstream('live','/api/qt/stock/get',{
+  secid:codeMarket(stock.code)+stock.code,fltt:2,invt:2,
+  fields:'f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f117,f162,f167,f168,f169,f170'
+},cfg);
+var row={code:stock.code,name:String(d.f58||stock.name||stock.code),
+  tradeDate:today(),close:n(d.f43),open:n(d.f46),high:n(d.f44),low:n(d.f45),
+  preClose:n(d.f60),volume:n(d.f47),amount:n(d.f48),pct:n(d.f170),
+  change:n(d.f169),turnover:n(d.f168),pe:n(d.f162),pb:n(d.f167),
+  totalMarketCap:n(d.f116),floatMarketCap:n(d.f117)};
+if(row.close===null)throw new Error(stock.code+' 无有效行情');
+await push('snapshot',[row],cfg);
+}
 async function sectors(cfg){for(var type of ['industry','concept']){var fs=type==='industry'?'m:90+t:2+f:!50':'m:90+t:3+f:!50';var page=1,total=0;while(page<=20){await gate();var d=await upstream('live','/api/qt/clist/get',Object.assign(clistArgs(page,fs),{fields:'f2,f3,f12,f14,f62,f104,f105,f128'}),cfg);var raw=d.diff;if(!Array.isArray(raw)||!raw.length)break;var rows=raw.map(function(r){return {type:type,code:String(r.f12||''),name:String(r.f14||''),price:n(r.f2),pct:n(r.f3),mainInflow:n(r.f62),upCount:n(r.f104),downCount:n(r.f105),leadStock:String(r.f128||'')};}).filter(function(x){return x.code&&x.name;});if(rows.length)await push('sector',rows,cfg);total+=rows.length;if(raw.length<100||(d.total>0&&total>=Number(d.total)))break;page++;}}
 }
 async function indexes(cfg){var d=await upstream('live','/api/qt/ulist.np/get',{fltt:2,invt:2,fields:'f2,f3,f4,f5,f6,f12,f14,f15,f16,f17,f18',secids:indexList.map(function(x){return x.secid;}).join(',')},cfg);var map=new Map((d.diff||[]).map(function(r){return [String(r.f12),r];}));var rows=indexList.filter(function(x){return map.has(x.code);}).map(function(x){var r=map.get(x.code);return {code:x.code,name:x.name,price:n(r.f2),pct:n(r.f3),change:n(r.f4),volume:n(r.f5),amount:n(r.f6),high:n(r.f15),low:n(r.f16),open:n(r.f17),preClose:n(r.f18)};}).filter(function(x){return x.price!==null;});if(rows.length)await push('index',rows,cfg);log('主要指数：'+rows.length+'/5');}
@@ -225,15 +238,21 @@ var cfg=options();if(!cfg.token)throw new Error('请填写桥接令牌');if(!cfg
 var response=await fetch(cfg.base+'/api/v1/bridge/status',{headers:{'X-Bridge-Token':cfg.token}});if(!response.ok){var j=await response.json().catch(function(){return {};});throw new Error('接收端不可用：'+(j.error||response.status));}
 var selected=cfg.scope==='selected';var needsStock=cfg.types.some(function(t){return t==='daily'||t==='minute'||t==='intraday';});
 var universe=[];
-if(cfg.types.includes('snapshot')||cfg.scope==='all'||(selected&&!/^\s*\d{6}([\s,，;；、]+\d{6})*\s*$/.test($('stocks').value))) {
-universe=await loadUniverse(cfg,cfg.types.includes('snapshot'));
+var hasName=selected&&!/^\s*\d{6}([\s,，;；、]+\d{6})*\s*$/.test($('stocks').value);
+if(cfg.scope==='all'||hasName) {
+  universe=await loadUniverse(cfg,cfg.scope==='all'&&cfg.types.includes('snapshot'));
 }
 if(cfg.types.includes('index'))await indexes(cfg);
 if(cfg.types.includes('sector'))await sectors(cfg);
-if(needsStock){
+if(needsStock||(selected&&cfg.types.includes('snapshot'))){
 var stocks=await resolveStocks(cfg,universe);if(!stocks.length)throw new Error('没有匹配的股票可采集');
 log('股票任务开始：'+stocks.length+'只，顺序执行');
-for(var stock of stocks){await gate();for(var type of cfg.types){try{if(type==='daily')await kline(stock,101,cfg);else if(type==='minute')await kline(stock,cfg.period,cfg);else if(type==='intraday')await intraday(stock,cfg);}catch(e){if(stopped)throw e;counts.errors++;show();log(stock.code+' '+type+' 失败，继续下一任务：'+e.message);}}
+for(var stock of stocks){await gate();for(var type of cfg.types){try{
+  if(type==='snapshot'&&selected)await selectedSnapshot(stock,cfg);
+  else if(type==='daily')await kline(stock,101,cfg);
+  else if(type==='minute')await kline(stock,cfg.period,cfg);
+  else if(type==='intraday')await intraday(stock,cfg);
+}catch(e){if(stopped)throw e;counts.errors++;show();log(stock.code+' '+type+' 失败，继续下一任务：'+e.message);}}
 counts.completed++;show();
 }
 }
