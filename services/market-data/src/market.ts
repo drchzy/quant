@@ -3,7 +3,6 @@ import { config } from './config.js';
 import { calculateIndicators } from './indicator.js';
 import {
   buildSecid,
-  getBatchQuotes,
   getIntradayTrend,
   getMarketDataSourceStatus,
   getQuote,
@@ -13,6 +12,8 @@ import type { MarketStock, SectorType } from './types.js';
 import { getEnabledSources, getSourceSettings } from './source-manager.js';
 import {
   fetchSnapshotBySource,
+  fetchIndexesBySource,
+  type IndexQuote,
   fetchSectorsBySource,
   fetchDailyBySource,
   fetchMinuteBySource,
@@ -46,75 +47,83 @@ async function fromEnabledSources<T>(
 
 
 let marketCache:
-  | { time: number; data: MarketStock[] }
+  | { time: number; key: string; data: MarketStock[] }
   | null = null;
 let marketInflight: Promise<MarketStock[]> | null = null;
+let marketInflightKey = '';
 
 const sectorCache = new Map<
   SectorType,
-  { time: number; data: Awaited<ReturnType<typeof fetchSectorsBySource>> }
+  { time: number; key: string; data: Awaited<ReturnType<typeof fetchSectorsBySource>> }
 >();
 const sectorInflight = new Map<
   SectorType,
-  Promise<Awaited<ReturnType<typeof fetchSectorsBySource>>>
+  { key: string; task: Promise<Awaited<ReturnType<typeof fetchSectorsBySource>>> }
 >();
 
 async function getLiveMarket(): Promise<MarketStock[]> {
+  const sources = await getEnabledSources('snapshot');
+  const key = sources.join('|');
   const now = Date.now();
 
   if (
-    marketCache &&
+    marketCache && marketCache.key === key &&
     now - marketCache.time < config.marketCacheTtlMs
   ) {
     return marketCache.data;
   }
 
-  if (marketInflight) return marketInflight;
+  if (marketInflight && marketInflightKey === key) return marketInflight;
 
+  marketInflightKey = key;
   marketInflight = fromEnabledSources('snapshot', (source) => fetchSnapshotBySource(source), (rows) => rows.length > 0)
     .then((result) => result.data)
     .then((data) => {
       marketCache = {
         time: Date.now(),
+        key,
         data
       };
       return data;
     })
     .finally(() => {
-      marketInflight = null;
+      if (marketInflightKey === key) marketInflight = null;
     });
 
   return marketInflight;
 }
 
 async function getLiveSectors(type: SectorType) {
+  const sources = await getEnabledSources('sector');
+  const key = sources.join('|');
   const now = Date.now();
   const cached = sectorCache.get(type);
 
   if (
-    cached &&
+    cached && cached.key === key &&
     now - cached.time < config.sectorCacheTtlMs
   ) {
     return cached.data;
   }
 
   const running = sectorInflight.get(type);
-  if (running) return running;
+  if (running?.key === key) return running.task;
 
   const task = fromEnabledSources('sector', (source) => fetchSectorsBySource(source, type), (rows) => rows.length > 0)
     .then((result) => result.data)
     .then((data) => {
       sectorCache.set(type, {
         time: Date.now(),
+        key,
         data
       });
       return data;
     })
     .finally(() => {
-      sectorInflight.delete(type);
+      if (sectorInflight.get(type)?.key === key) sectorInflight.delete(type);
     });
 
-  sectorInflight.set(type, task);
+  sectorInflight.set(type, { key, task });
   return task;
 }
 
@@ -139,7 +148,7 @@ function buildBreadth(rows: MarketStock[]) {
 
 /**
  * 市场总览同时给页面和 AI 使用。
- * live=true 时直接获取当前东财数据，避免依赖数据库里上一次同步结果。
+ * live=true 按数据源能力与优先级访问，失败后回退本地 DuckDB。
  */
 async function getStoredMarketRows(): Promise<MarketStock[]> {
   return all<MarketStock>(`
@@ -169,6 +178,58 @@ async function getStoredMarketRows(): Promise<MarketStock[]> {
       SELECT MAX(trade_date) FROM daily_price
     )
   `);
+}
+
+/** 按启用与优先级逐级补齐指数；每个指数成功后不再请求后续源。 */
+async function getLiveIndexes() {
+  const enabled = await getEnabledSources('index');
+  const quotes = new Map<string, IndexQuote>();
+  const errors: string[] = [];
+  for (const source of enabled) {
+    const pending = mainIndexes.filter((item) => !quotes.has(item.code));
+    if (pending.length === 0) break;
+    try {
+      const result = await fetchIndexesBySource(source, pending);
+      for (const item of pending) {
+        const quote = result.get(item.code);
+        if (quote && quote.price > 0 && Number.isFinite(quote.pct)) {
+          quotes.set(item.code, quote);
+        }
+      }
+      if (result.size === 0) errors.push(source + ': 指数数据为空');
+    } catch (error) {
+      errors.push(source + ': ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  if (quotes.size === 0) {
+    throw new Error('指数数据源全部不可用：' + errors.join('; '));
+  }
+  for (const item of mainIndexes) {
+    const quote = quotes.get(item.code);
+    if (!quote) continue;
+    await run(
+      `INSERT INTO market_index (
+        code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+      ON CONFLICT (code) DO UPDATE SET
+        price = excluded.price, open = excluded.open,
+        high = excluded.high, low = excluded.low,
+        pre_close = excluded.pre_close, pct = excluded.pct,
+        change = excluded.change, volume = excluded.volume,
+        amount = excluded.amount, updated_at = now()`,
+      [
+        item.code, item.name, quote.price, quote.open ?? null,
+        quote.high ?? null, quote.low ?? null, quote.preClose ?? null,
+        quote.pct, quote.change, quote.volume ?? null, quote.amount ?? null
+      ]
+    );
+  }
+  const stored = await getStoredIndexes();
+  return {
+    indexes: stored,
+    missing: mainIndexes.filter((item) => !quotes.has(item.code)).map((item) => item.name),
+    errors
+  };
 }
 
 async function getStoredIndexes() {
@@ -219,17 +280,16 @@ export async function getMarketOverview(live = true) {
     }
 
     try {
-      if (!(await isPush2Enabled())) throw new Error('Push2 已禁用');
-      const quotes = await getBatchQuotes(
-        mainIndexes.map((item) => item.secid)
-      );
-      indexes = mainIndexes.map((item) => ({
-        ...item,
-        quote: quotes.get(item.code) || null
-      }));
+      const result = await getLiveIndexes();
+      indexes = result.indexes;
+      if (result.missing.length > 0) {
+        degraded = true;
+        warnings.push('部分指数未取得实时行情，已优先显示本地数据：' + result.missing.join('、'));
+      }
     } catch (error) {
       degraded = true;
-      warnings.push('指数实时行情不可用，已回退本地数据');
+      warnings.push('指数实时行情不可用，已回退本地数据：' +
+        (error instanceof Error ? error.message : String(error)));
       indexes = await getStoredIndexes();
     }
 
@@ -243,7 +303,7 @@ export async function getMarketOverview(live = true) {
       industry = industryResult.value;
     } else {
       degraded = true;
-      warnings.push('行业板块实时行情不可用，已回退本地数据');
+      warnings.push('行业板块：启用的数据源无板块能力或请求失败，显示本地已同步记录');
       industry = await getStoredSectors('industry');
     }
 
@@ -251,7 +311,7 @@ export async function getMarketOverview(live = true) {
       concept = conceptResult.value;
     } else {
       degraded = true;
-      warnings.push('概念板块实时行情不可用，已回退本地数据');
+      warnings.push('概念板块：启用的数据源无板块能力或请求失败，显示本地已同步记录');
       concept = await getStoredSectors('concept');
     }
   } else {
