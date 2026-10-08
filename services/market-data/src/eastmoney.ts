@@ -30,7 +30,7 @@ const historyBases = [
   'https://push2his.eastmoney.com'
 ];
 
-interface SourceStatus {
+export interface SourceStatus {
   lastSuccessAt: string | null;
   lastSuccessHost: string | null;
   lastErrorAt: string | null;
