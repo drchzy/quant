@@ -1,7 +1,7 @@
 {
   "name": "quant",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "workspaces": ["services/*", "apps/*"],
   "scripts": {
     "dev:market-data": "npm --workspace @quant/market-data run dev",
@@ -10,8 +10,11 @@
     "dev:stock-select": "npm --workspace @quant/stock-select run dev",
     "build:stock-select": "npm --workspace @quant/stock-select run build",
     "start:stock-select": "npm --workspace @quant/stock-select run start",
+    "dev:trade-manager": "npm --workspace @quant/trade-manager run dev",
+    "build:trade-manager": "npm --workspace @quant/trade-manager run build",
+    "start:trade-manager": "npm --workspace @quant/trade-manager run start",
     "dev:web": "npm --workspace @quant/web run dev",
     "build:web": "npm --workspace @quant/web run build",
-    "build": "npm run build:market-data && npm run build:stock-select && npm run build:web"
+    "build": "npm run build:market-data && npm run build:stock-select && npm run build:trade-manager && npm run build:web"
   }
 }
