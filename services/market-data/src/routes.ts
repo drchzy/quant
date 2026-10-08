@@ -296,7 +296,7 @@ export async function registerRoutes(
     try {
       const body = (request.body || {}) as {
         source?: DataSourceId;
-        capability?: 'snapshot' | 'daily' | 'minute' | 'sector';
+        capability?: 'snapshot' | 'daily' | 'minute' | 'sector' | 'index';
       };
 
       if (!body.source) {
