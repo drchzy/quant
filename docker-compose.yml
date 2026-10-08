@@ -1,0 +1,45 @@
+services:
+  market-data:
+    image: ${MARKET_DATA_IMAGE:-drchzy/quant-market-data:latest}
+    build:
+      context: .
+      dockerfile: services/market-data/Dockerfile
+    container_name: quant-market-data
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_PATH: /app/data/market.duckdb
+      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+      DAILY_SYNC_CRON: ${DAILY_SYNC_CRON:-10 16 * * 1-5}
+      EASTMONEY_TIMEOUT_MS: ${EASTMONEY_TIMEOUT_MS:-10000}
+      EASTMONEY_PAGE_SIZE: ${EASTMONEY_PAGE_SIZE:-500}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    image: ${WEB_IMAGE:-drchzy/quant-web:latest}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: quant-web
+    restart: unless-stopped
+    depends_on:
+      market-data:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8088}:80"
