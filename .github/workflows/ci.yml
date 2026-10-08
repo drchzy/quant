@@ -60,6 +60,26 @@ jobs:
           cat /tmp/stock-select.log
           exit 1
 
+      - name: 启动 trade-manager
+        shell: bash
+        run: |
+          TRADE_MONITOR_ENABLED=false \
+          TRADE_DATABASE_PATH="$PWD/data/ci-trade.duckdb" \
+          MARKET_DATA_URL="http://127.0.0.1:8080" \
+          STOCK_SELECT_URL="http://127.0.0.1:8090" \
+          node services/trade-manager/dist/server.js > /tmp/trade-manager.log 2>&1 &
+          echo $! > /tmp/trade-manager.pid
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:8091/health; then
+              curl -fsS http://127.0.0.1:8091/api/v1/trading/today
+              curl -fsS http://127.0.0.1:8091/api/v1/trading/events?limit=5
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/trade-manager.log
+          exit 1
+
       - name: 检查 Docker Compose
         run: docker compose config
 
@@ -69,6 +89,9 @@ jobs:
       - name: 构建 stock-select 镜像
         run: docker build -f services/stock-select/Dockerfile -t quant-stock-select:test .
 
+      - name: 构建 trade-manager 镜像
+        run: docker build -f services/trade-manager/Dockerfile -t quant-trade-manager:test .
+
       - name: 构建 Web 镜像
         run: docker build -f apps/web/Dockerfile -t quant-web:test .
 
@@ -76,5 +99,6 @@ jobs:
         if: always()
         shell: bash
         run: |
+          if [ -f /tmp/trade-manager.pid ]; then kill "$(cat /tmp/trade-manager.pid)" || true; fi
           if [ -f /tmp/stock-select.pid ]; then kill "$(cat /tmp/stock-select.pid)" || true; fi
           if [ -f /tmp/market-data.pid ]; then kill "$(cat /tmp/market-data.pid)" || true; fi
