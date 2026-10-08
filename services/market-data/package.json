@@ -3,17 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@fastify/cors": "^11.0.1",
+    "duckdb": "^1.4.1",
     "eastmoney-data-sdk": "^1.0.5",
-    "fastify": "^5.6.1"
+    "fastify": "^5.6.1",
+    "node-cron": "^4.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

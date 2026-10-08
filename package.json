@@ -2,13 +2,13 @@
   "name": "quant",
   "private": true,
   "version": "0.1.0",
-  "workspaces": [
-    "services/*",
-    "apps/*"
-  ],
+  "workspaces": ["services/*", "apps/*"],
   "scripts": {
     "dev:market-data": "npm --workspace @quant/market-data run dev",
     "build:market-data": "npm --workspace @quant/market-data run build",
-    "start:market-data": "npm --workspace @quant/market-data run start"
+    "start:market-data": "npm --workspace @quant/market-data run start",
+    "dev:web": "npm --workspace @quant/web run dev",
+    "build:web": "npm --workspace @quant/web run build",
+    "build": "npm run build:market-data && npm run build:web"
   }
 }

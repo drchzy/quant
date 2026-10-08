@@ -1,43 +1,45 @@
 # market-data
 
-A local-first A-share market data service.
+本地 A 股行情数据服务。
 
-Current provider:
+## 数据源
 
-- Eastmoney via `eastmoney-data-sdk@^1.0.5`
+当前只接东方财富：
 
-Current endpoints:
+- `eastmoney-data-sdk`：日 K、分钟 K、分时、单股实时行情。
+- 东财公开 HTTP 接口：全市场扩展字段、行业板块、概念板块。
 
-- `GET /health`
-- `GET /api/v1/stocks/:code/quote`
-- `GET /api/v1/stocks/:code/daily?limit=120`
-- `GET /api/v1/stocks/:code/intraday`
-- `GET /api/v1/stocks/:code/minute?period=1&limit=500`
-- `GET /api/v1/market/stocks?page=1&pageSize=100`
+## 已提供接口
 
-## Run
+```text
+GET  /health
 
-From repository root:
+GET  /api/v1/market/overview
+GET  /api/v1/market/stocks
+GET  /api/v1/sectors
 
-```bash
-npm install
-npm run dev:market-data
+GET  /api/v1/stocks/search
+GET  /api/v1/stocks/:code
+GET  /api/v1/stocks/:code/quote
+GET  /api/v1/stocks/:code/daily
+GET  /api/v1/stocks/:code/minute
+GET  /api/v1/stocks/:code/intraday
+
+POST /api/v1/sync/daily
+POST /api/v1/sync/sectors
+POST /api/v1/sync/history
+GET  /api/v1/sync/jobs
+
+GET  /api/v1/ai/market
+GET  /api/v1/ai/stock/:code
 ```
 
-Default listen address: `0.0.0.0:8080`.
+## 数据库
 
-Example:
+默认使用：
 
-```bash
-curl http://localhost:8080/api/v1/stocks/600186/daily?limit=60
-curl http://localhost:8080/api/v1/stocks/600186/intraday
+```text
+data/market.duckdb
 ```
 
-Next planned layers:
-
-1. DuckDB persistence and incremental sync
-2. full-market daily snapshot sync
-3. industry/concept/index datasets
-4. AI-friendly query endpoints
-5. Web dashboard
-6. Docker / docker-compose / Docker Hub image pipeline
+分钟数据只在查询候选股或持仓时保存，不保存全市场每一分钟的数据。
