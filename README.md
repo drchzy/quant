@@ -4,14 +4,15 @@
 
 本地 A 股行情与量化研究平台。
 
-当前完成第一阶段：**market-data**。
+当前已完成两层核心能力：**market-data 行情层** + **stock-select 超短趋势选股层**。
 
 ## 目录
 
 ```text
 quant/
 ├─ services/
-│  └─ market-data/       # 行情采集、DuckDB、REST API、定时同步
+│  ├─ market-data/       # 行情采集、DuckDB、REST API、定时同步
+│  └─ stock-select/      # 超短趋势选股、评分、次日计划
 ├─ apps/
 │  └─ web/               # 本地行情与管理页面
 ├─ docs/
@@ -41,6 +42,10 @@ quant/
 - 每日自动增量同步
 - Web 页面
 - AI 聚合查询接口
+- 全市场技术指标
+- 超短趋势自动选股
+- Top10 候选 + 重点3只
+- 次日买入区、止损、止盈、移动止盈计划
 
 ## Docker Compose 启动
 
@@ -100,6 +105,18 @@ GET /api/v1/ai/market
 GET /api/v1/ai/stock/600186
 ```
 
+每日选股：
+
+```text
+GET /api/v1/select/ai
+```
+
+手动执行选股：
+
+```text
+POST /api/v1/select/run
+```
+
 详细设计见：
 
 ```text
@@ -125,5 +142,19 @@ docs/architecture.md
 
 ```text
 <DOCKERHUB_USERNAME>/quant-market-data
+<DOCKERHUB_USERNAME>/quant-stock-select
 <DOCKERHUB_USERNAME>/quant-web
+```
+
+## 默认执行时间
+
+```text
+16:10  同步当天全市场行情
+16:40  自动运行超短趋势选股
+```
+
+选股策略详细说明：
+
+```text
+docs/stock-select.md
 ```
