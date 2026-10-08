@@ -55,6 +55,12 @@ async function updateJob(
   );
 }
 
+function getMarketName(code: string, market: number): string {
+  // 北交所股票代码通常以 4、8、92 开头；其余再按东财 market 字段区分沪深。
+  if (/^(4|8|92)/.test(code)) return '北京';
+  return market === 1 ? '上海' : '深圳';
+}
+
 async function saveStock(item: {
   code: string;
   name: string;
@@ -64,7 +70,7 @@ async function saveStock(item: {
     `INSERT OR REPLACE INTO stock
       (code, name, market, market_name, updated_at)
      VALUES (?, ?, ?, ?, current_timestamp)`,
-    [item.code, item.name, item.market, item.market === 1 ? '上海' : '深圳']
+    [item.code, item.name, item.market, getMarketName(item.code, item.market)]
   );
 }
 
@@ -124,17 +130,25 @@ export async function syncDailyMarket(): Promise<string> {
       });
 
       let done = 0;
-      for (const item of stocks) {
-        await saveStock(item);
-        await saveDaily(item, tradeDate);
-        done += 1;
 
-        if (done % 100 === 0 || done === stocks.length) {
-          await updateJob(jobId, {
-            done,
-            message: `正在保存 ${done}/${stocks.length}`
-          });
+      await run('BEGIN TRANSACTION');
+      try {
+        for (const item of stocks) {
+          await saveStock(item);
+          await saveDaily(item, tradeDate);
+          done += 1;
+
+          if (done % 100 === 0 || done === stocks.length) {
+            await updateJob(jobId, {
+              done,
+              message: `正在保存 ${done}/${stocks.length}`
+            });
+          }
         }
+        await run('COMMIT');
+      } catch (error) {
+        await run('ROLLBACK');
+        throw error;
       }
 
       await syncIndexes();
@@ -169,26 +183,34 @@ export async function syncSectors(): Promise<string> {
       await updateJob(jobId, { total });
 
       let done = 0;
-      for (const rows of groups) {
-        for (const item of rows) {
-          await run(
-            `INSERT OR REPLACE INTO sector
-              (type, code, name, price, pct, main_inflow, up_count, down_count, lead_stock, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
-            [
-              item.type,
-              item.code,
-              item.name,
-              item.price,
-              item.pct,
-              item.mainInflow,
-              item.upCount,
-              item.downCount,
-              item.leadStock
-            ]
-          );
-          done += 1;
+
+      await run('BEGIN TRANSACTION');
+      try {
+        for (const rows of groups) {
+          for (const item of rows) {
+            await run(
+              `INSERT OR REPLACE INTO sector
+                (type, code, name, price, pct, main_inflow, up_count, down_count, lead_stock, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+              [
+                item.type,
+                item.code,
+                item.name,
+                item.price,
+                item.pct,
+                item.mainInflow,
+                item.upCount,
+                item.downCount,
+                item.leadStock
+              ]
+            );
+            done += 1;
+          }
         }
+        await run('COMMIT');
+      } catch (error) {
+        await run('ROLLBACK');
+        throw error;
       }
 
       await updateJob(jobId, {
@@ -246,24 +268,31 @@ export async function syncHistory(
             1
           );
 
-          for (const item of rows) {
-            await saveDaily(
-              {
-                code: stock.code,
-                open: item.open,
-                close: item.close,
-                high: item.high,
-                low: item.low,
-                volume: item.volume,
-                amount: item.amount,
-                pct: item.pct,
-                change: item.change,
-                amplitude: item.amplitude,
-                turnover: item.turnover
-              },
-              item.date.slice(0, 10),
-              'eastmoney-kline'
-            );
+          await run('BEGIN TRANSACTION');
+          try {
+            for (const item of rows) {
+              await saveDaily(
+                {
+                  code: stock.code,
+                  open: item.open,
+                  close: item.close,
+                  high: item.high,
+                  low: item.low,
+                  volume: item.volume,
+                  amount: item.amount,
+                  pct: item.pct,
+                  change: item.change,
+                  amplitude: item.amplitude,
+                  turnover: item.turnover
+                },
+                item.date.slice(0, 10),
+                'eastmoney-kline'
+              );
+            }
+            await run('COMMIT');
+          } catch (error) {
+            await run('ROLLBACK');
+            throw error;
           }
         } catch (error) {
           // 单只股票失败不终止全市场任务，避免一次网络抖动导致前功尽弃。
