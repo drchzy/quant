@@ -380,7 +380,7 @@ export async function getTechnicalStocks(days = 30) {
   const safeDays = Math.min(Math.max(days, 21), 120);
 
   const rows = await all<any>(
-    \`WITH ranked AS (
+    `WITH ranked AS (
        SELECT
          s.code,
          s.name,
@@ -412,7 +412,7 @@ export async function getTechnicalStocks(days = 30) {
      SELECT *
      FROM ranked
      WHERE rn <= ?
-     ORDER BY code, trade_date\`,
+     ORDER BY code, trade_date`,
     [safeDays]
   );
 
