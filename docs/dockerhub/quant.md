@@ -260,3 +260,36 @@ sha-<commit>
 - 正式环境固定使用 `0.4.0-build.xxx`，方便升级和回滚。
 - `latest` 只用于希望始终跟随最新版本的环境。
 - 每次发布都会产生新的版本号，不覆盖旧的版本标签。
+
+
+## 行情网络稳定性配置
+
+东方财富 `push2/push2his` 存在 IP 级风控，因此镜像内默认：
+
+- 实时行情优先 `push2delay.eastmoney.com`。
+- 东财所有请求共用全局限速队列。
+- 全市场快照缓存 60 秒。
+- 板块缓存 5 分钟。
+- 日K/分钟K在东财历史接口失败时自动切换腾讯财经备用源。
+- 市场总览实时源失败时回退 DuckDB，不直接返回 500。
+
+可调参数：
+
+| 配置 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `EASTMONEY_MIN_INTERVAL_MS` | 1000 | 东财请求最小间隔 |
+| `EASTMONEY_RETRY_COUNT` | 2 | 单主机重试次数 |
+| `EASTMONEY_RETRY_BASE_MS` | 1500 | 指数退避基础时间 |
+| `EASTMONEY_PAGE_SIZE` | 100 | push2delay 全市场分页 |
+| `MARKET_CACHE_TTL_MS` | 60000 | 全市场实时快照缓存 |
+| `SECTOR_CACHE_TTL_MS` | 300000 | 板块缓存 |
+| `QUOTE_CACHE_TTL_MS` | 5000 | 个股实时行情缓存 |
+| `TREND_CACHE_TTL_MS` | 10000 | 个股分时缓存 |
+| `FALLBACK_MIN_INTERVAL_MS` | 300 | 腾讯备用源最小间隔 |
+| `FALLBACK_RETRY_COUNT` | 1 | 腾讯备用源重试次数 |
+
+诊断：
+
+```text
+http://服务器IP:8088/api/v1/market/source-status
+```
