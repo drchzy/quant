@@ -24,81 +24,56 @@ jobs:
       - name: 安装依赖
         run: npm install
 
-      - name: 编译全部服务和页面
+      - name: 编译全部模块和页面
         run: npm run build
 
-      - name: 启动 market-data
+      - name: 检查单容器 Compose
+        run: |
+          docker compose config
+          docker compose -f web/docker-compose.yml config
+
+      - name: 构建 All-in-One 镜像
+        run: docker build -t quant:test .
+
+      - name: 准备 CI 运行目录
         shell: bash
         run: |
-          mkdir -p data
-          SYNC_ENABLED=false DATABASE_PATH="$PWD/data/ci-market.duckdb" node services/market-data/dist/server.js > /tmp/market-data.log 2>&1 &
-          echo $! > /tmp/market-data.pid
-          for i in {1..20}; do
-            if curl -fsS http://127.0.0.1:8080/health; then
-              curl -fsS "http://127.0.0.1:8080/api/v1/market/technical?days=30"
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/market-data.log
-          exit 1
+          mkdir -p ci-web/data
+          cp web/.env ci-web/.env
+          sed -i 's/SYNC_ENABLED="true"/SYNC_ENABLED="false"/' ci-web/.env
+          sed -i 's/AUTO_SELECT_ENABLED="true"/AUTO_SELECT_ENABLED="false"/' ci-web/.env
+          sed -i 's/TRADE_MONITOR_ENABLED="true"/TRADE_MONITOR_ENABLED="false"/' ci-web/.env
 
-      - name: 启动 stock-select
+      - name: 启动 All-in-One 容器
+        run: |
+          docker run -d \
+            --name quant-ci \
+            -p 18088:8088 \
+            -v "$PWD/ci-web:/app/web" \
+            quant:test
+
+      - name: 验证统一端口
         shell: bash
         run: |
-          AUTO_SELECT_ENABLED=false           SELECT_DATABASE_PATH="$PWD/data/ci-select.duckdb"           MARKET_DATA_URL="http://127.0.0.1:8080"           node services/stock-select/dist/server.js > /tmp/stock-select.log 2>&1 &
-          echo $! > /tmp/stock-select.pid
-          for i in {1..20}; do
-            if curl -fsS http://127.0.0.1:8090/health; then
-              curl -fsS http://127.0.0.1:8090/api/v1/select/config
-              curl -fsS "http://127.0.0.1:8090/api/v1/select/review/summary?mainOnly=true"
-              curl -fsS http://127.0.0.1:8090/api/v1/select/backtests/latest
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:18088/health; then
+              curl -fsS http://127.0.0.1:18088/
+              curl -fsS http://127.0.0.1:18088/api/v1/select/config
+              curl -fsS http://127.0.0.1:18088/api/v1/trading/today
+              test -f ci-web/data/market.duckdb
+              test -f ci-web/data/select.duckdb
+              test -f ci-web/data/trade.duckdb
               exit 0
             fi
-            sleep 1
+            sleep 2
           done
-          cat /tmp/stock-select.log
+          docker logs quant-ci
           exit 1
 
-      - name: 启动 trade-manager
-        shell: bash
-        run: |
-          TRADE_MONITOR_ENABLED=false \
-          TRADE_DATABASE_PATH="$PWD/data/ci-trade.duckdb" \
-          MARKET_DATA_URL="http://127.0.0.1:8080" \
-          STOCK_SELECT_URL="http://127.0.0.1:8090" \
-          node services/trade-manager/dist/server.js > /tmp/trade-manager.log 2>&1 &
-          echo $! > /tmp/trade-manager.pid
-          for i in {1..20}; do
-            if curl -fsS http://127.0.0.1:8091/health; then
-              curl -fsS http://127.0.0.1:8091/api/v1/trading/today
-              curl -fsS http://127.0.0.1:8091/api/v1/trading/events?limit=5
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/trade-manager.log
-          exit 1
+      - name: 输出容器日志
+        if: failure()
+        run: docker logs quant-ci || true
 
-      - name: 检查 Docker Compose
-        run: docker compose config
-
-      - name: 构建 market-data 镜像
-        run: docker build -f services/market-data/Dockerfile -t quant-market-data:test .
-
-      - name: 构建 stock-select 镜像
-        run: docker build -f services/stock-select/Dockerfile -t quant-stock-select:test .
-
-      - name: 构建 trade-manager 镜像
-        run: docker build -f services/trade-manager/Dockerfile -t quant-trade-manager:test .
-
-      - name: 构建 Web 镜像
-        run: docker build -f apps/web/Dockerfile -t quant-web:test .
-
-      - name: 停止测试服务
+      - name: 停止测试容器
         if: always()
-        shell: bash
-        run: |
-          if [ -f /tmp/trade-manager.pid ]; then kill "$(cat /tmp/trade-manager.pid)" || true; fi
-          if [ -f /tmp/stock-select.pid ]; then kill "$(cat /tmp/stock-select.pid)" || true; fi
-          if [ -f /tmp/market-data.pid ]; then kill "$(cat /tmp/market-data.pid)" || true; fi
+        run: docker rm -f quant-ci || true
