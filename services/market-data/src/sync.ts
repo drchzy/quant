@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { all, one, run } from './database.js';
 import {
-  buildSecid,
-  eastmoney,
+  getDailyKline,
   getLatestTradeDate,
   getMarketStocks,
+  getQuote,
   getSectors,
   mainIndexes
 } from './eastmoney.js';
@@ -289,18 +289,23 @@ export async function syncHistory(
       });
 
       let done = 0;
+      let consecutiveFailures = 0;
 
       for (const stock of stocks) {
         try {
-          const rows = await eastmoney.dailyKline(
-            buildSecid(stock.code),
+          const result = await getDailyKline(
+            stock.code,
             days,
             1
           );
 
+          if (result.data.length === 0) {
+            throw new Error('日K返回为空');
+          }
+
           await run('BEGIN TRANSACTION');
           try {
-            for (const item of rows) {
+            for (const item of result.data) {
               await saveDaily(
                 {
                   code: stock.code,
@@ -316,7 +321,7 @@ export async function syncHistory(
                   turnover: item.turnover
                 },
                 item.date.slice(0, 10),
-                'eastmoney-kline'
+                result.source
               );
             }
             await run('COMMIT');
@@ -324,9 +329,22 @@ export async function syncHistory(
             await run('ROLLBACK');
             throw error;
           }
+
+          consecutiveFailures = 0;
         } catch (error) {
-          // 单只股票失败不终止全市场任务，避免一次网络抖动导致前功尽弃。
-          console.error(`同步 ${stock.code} 历史日 K 失败`, error);
+          consecutiveFailures += 1;
+          console.error(
+            `同步 ${stock.code} 历史日 K 失败（连续 ${consecutiveFailures} 只）`,
+            error
+          );
+
+          // 两个数据源都连续失败时，说明当前出口网络异常。
+          // 直接结束任务，避免对几千只股票继续无效重试、进一步触发上游风控。
+          if (consecutiveFailures >= 5) {
+            throw new Error(
+              `历史日K连续5只股票失败，已停止任务：${error instanceof Error ? error.message : String(error)}`
+            );
+          }
         }
 
         done += 1;
@@ -358,27 +376,35 @@ export async function syncHistory(
 
 export async function syncIndexes(): Promise<void> {
   for (const item of mainIndexes) {
-    const quote = await eastmoney.quote(item.secid);
-    if (!quote) continue;
+    try {
+      const quote = await getQuote(item.secid);
+      if (!quote) continue;
 
-    await run(
-      `INSERT OR REPLACE INTO market_index
-        (code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
-      [
-        item.code,
-        item.name,
-        quote.price,
-        quote.open,
-        quote.high,
-        quote.low,
-        quote.preClose,
-        quote.pct,
-        quote.change,
-        quote.volume,
-        quote.amount
-      ]
-    );
+      await run(
+        `INSERT OR REPLACE INTO market_index
+          (code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+        [
+          item.code,
+          item.name,
+          quote.price,
+          quote.open,
+          quote.high,
+          quote.low,
+          quote.preClose,
+          quote.pct,
+          quote.change,
+          quote.volume,
+          quote.amount
+        ]
+      );
+    } catch (error) {
+      // 指数实时源失败不影响全市场日线落库，继续保留数据库上一次值。
+      console.warn(
+        `同步指数 ${item.code} 失败，保留旧数据`,
+        error
+      );
+    }
   }
 }
 
