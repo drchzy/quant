@@ -5,7 +5,10 @@ import { DailyChart, MinuteChart } from './charts';
 type Page = 'market' | 'stock' | 'sector' | 'select' | 'trading' | 'review' | 'sync';
 
 function Change({ value }: { value: unknown }) {
-  const number = Number(value || 0);
+  if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) {
+    return <span>—</span>;
+  }
+  const number = Number(value);
   const className =
     number > 0 ? 'up' : number < 0 ? 'down' : '';
 
@@ -62,6 +65,9 @@ function SectorTable({
   return (
     <section className="panel">
       <h3>{title}</h3>
+      {rows.length === 0 && (
+        <div className="notice">暂无板块数据。请在数据同步页启用支持“板块”的数据源并同步；未启用时不会请求东方财富。</div>
+      )}
       <table>
         <thead>
           <tr>
@@ -132,10 +138,10 @@ function MarketPage() {
 
       {data.degraded && (
         <div className="notice">
-          实时数据源暂不可用，当前展示本地最近一次成功数据。
-          {(data.warnings || []).length > 0 && (
-            <span> {data.warnings[0]}</span>
-          )}
+          部分数据暂不可用，已使用可获取的实时行情及本地历史数据。
+          {(data.warnings || []).map((warning: string, i: number) => (
+            <div key={i}>{warning}</div>
+          ))}
         </div>
       )}
 
@@ -1317,7 +1323,8 @@ function SyncPage() {
     snapshot: '全市场',
     daily: '日K',
     minute: '分钟K',
-    sector: '板块'
+    sector: '板块',
+    index: '指数'
   };
 
   const sourceName = (id: string) =>
@@ -1547,7 +1554,7 @@ function SyncPage() {
           <div>
             <h3>数据源管理</h3>
             <p>
-              勾选的数据源参与同步；多个数据源按从上到下顺序尝试，第一个成功后停止降级。
+              数据源按能力过滤后从上到下依次尝试；例如新浪支持全市场快照，腾讯支持日K、分钟K和指数。禁用的数据源不会参与业务请求。
             </p>
           </div>
           <button
