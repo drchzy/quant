@@ -296,6 +296,7 @@ export async function registerRoutes(
     try {
       const body = (request.body || {}) as {
         source?: DataSourceId;
+        capability?: 'snapshot' | 'daily' | 'minute' | 'sector';
       };
 
       if (!body.source) {
@@ -304,7 +305,10 @@ export async function registerRoutes(
         });
       }
 
-      return await testSource(body.source);
+      return await testSource(
+        body.source,
+        body.capability
+      );
     } catch (error) {
       return reply.code(400).send({
         error:
