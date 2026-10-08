@@ -1,0 +1,66 @@
+name: Sync Docker Hub README
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/dockerhub/**"
+      - ".github/workflows/dockerhub-readme.yml"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 生成 Docker Hub README
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          mkdir -p /tmp/dockerhub-readme
+          for file in market-data stock-select trade-manager web; do
+            sed "s/__DOCKERHUB_USERNAME__/${DOCKERHUB_USERNAME}/g" \
+              "docs/dockerhub/${file}.md" \
+              > "/tmp/dockerhub-readme/${file}.md"
+          done
+
+      - name: 更新 market-data README
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-market-data
+          short-description: A股本地行情、日K、分时、板块与DuckDB数据服务
+          readme-filepath: /tmp/dockerhub-readme/market-data.md
+
+      - name: 更新 stock-select README
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-stock-select
+          short-description: A股超短趋势选股、每日计划、策略复盘与参数回测服务
+          readme-filepath: /tmp/dockerhub-readme/stock-select.md
+
+      - name: 更新 trade-manager README
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-trade-manager
+          short-description: A股持仓、T+1、盘中监控、止盈止损与执行状态管理服务
+          readme-filepath: /tmp/dockerhub-readme/trade-manager.md
+
+      - name: 更新 web README
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/quant-web
+          short-description: A股行情、选股、盘中执行与策略复盘统一Web管理页面
+          readme-filepath: /tmp/dockerhub-readme/web.md
