@@ -12,6 +12,17 @@ import type { SectorType } from './types.js';
 
 type JobStatus = 'running' | 'success' | 'failed';
 
+// 所有重型同步任务串行执行，避免多个事务同时写同一个 DuckDB 文件。
+let syncQueue: Promise<void> = Promise.resolve();
+
+function enqueueSync(task: () => Promise<void>): void {
+  syncQueue = syncQueue
+    .then(task)
+    .catch((error) => {
+      console.error('同步任务执行失败', error);
+    });
+}
+
 async function createJob(jobType: string): Promise<string> {
   const id = randomUUID();
   await run(
@@ -80,12 +91,31 @@ async function saveDaily(
   source = 'eastmoney'
 ): Promise<void> {
   await run(
-    `INSERT OR REPLACE INTO daily_price (
+    `INSERT INTO daily_price (
       code, trade_date, open, close, high, low, pre_close,
       volume, amount, pct, change, amplitude, turnover,
       pe, pb, volume_ratio, total_market_cap, float_market_cap,
       source, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
+    ON CONFLICT (code, trade_date) DO UPDATE SET
+      open = excluded.open,
+      close = excluded.close,
+      high = excluded.high,
+      low = excluded.low,
+      pre_close = COALESCE(excluded.pre_close, daily_price.pre_close),
+      volume = excluded.volume,
+      amount = excluded.amount,
+      pct = excluded.pct,
+      change = excluded.change,
+      amplitude = excluded.amplitude,
+      turnover = excluded.turnover,
+      pe = COALESCE(excluded.pe, daily_price.pe),
+      pb = COALESCE(excluded.pb, daily_price.pb),
+      volume_ratio = COALESCE(excluded.volume_ratio, daily_price.volume_ratio),
+      total_market_cap = COALESCE(excluded.total_market_cap, daily_price.total_market_cap),
+      float_market_cap = COALESCE(excluded.float_market_cap, daily_price.float_market_cap),
+      source = excluded.source,
+      updated_at = current_timestamp`,
     [
       item.code,
       tradeDate,
@@ -117,7 +147,7 @@ async function saveDaily(
 export async function syncDailyMarket(): Promise<string> {
   const jobId = await createJob('daily');
 
-  void (async () => {
+  enqueueSync(async () => {
     try {
       const [stocks, tradeDate] = await Promise.all([
         getMarketStocks(),
@@ -166,7 +196,7 @@ export async function syncDailyMarket(): Promise<string> {
         finish: true
       });
     }
-  })();
+  });
 
   return jobId;
 }
@@ -174,7 +204,7 @@ export async function syncDailyMarket(): Promise<string> {
 export async function syncSectors(): Promise<string> {
   const jobId = await createJob('sector');
 
-  void (async () => {
+  enqueueSync(async () => {
     try {
       const types: SectorType[] = ['industry', 'concept'];
       const groups = await Promise.all(types.map((type) => getSectors(type)));
@@ -226,7 +256,7 @@ export async function syncSectors(): Promise<string> {
         finish: true
       });
     }
-  })();
+  });
 
   return jobId;
 }
@@ -241,7 +271,7 @@ export async function syncHistory(
 ): Promise<string> {
   const jobId = await createJob('history');
 
-  void (async () => {
+  enqueueSync(async () => {
     try {
       let stocks = codes.length
         ? codes.map((code) => ({ code }))
@@ -321,7 +351,7 @@ export async function syncHistory(
         finish: true
       });
     }
-  })();
+  });
 
   return jobId;
 }
