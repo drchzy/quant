@@ -3,16 +3,60 @@ name: Publish Docker Image
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "publish/**"
+    paths:
+      - ".github/publish-request"
     tags:
       - "v*"
+
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 检出代码
+      - name: 检出触发提交
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 确定要发布的源码提交
+        id: source
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/heads/publish/* ]]; then
+            if [[ ! -f .github/publish-request ]]; then
+              echo "publish 分支缺少 .github/publish-request"
+              exit 1
+            fi
+
+            SOURCE_SHA="$(tr -d '[:space:]' < .github/publish-request)"
+            if [[ ! "${SOURCE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "publish-request 必须只包含 40 位 commit SHA"
+              exit 1
+            fi
+
+            git fetch origin main --quiet
+            if ! git merge-base --is-ancestor "${SOURCE_SHA}" origin/main; then
+              echo "请求发布的 SHA 不在 main 历史中：${SOURCE_SHA}"
+              exit 1
+            fi
+          else
+            SOURCE_SHA="${GITHUB_SHA}"
+          fi
+
+          echo "sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "发布源码提交：${SOURCE_SHA}"
+
+      - name: 检出待发布源码
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
 
       - name: 读取本次镜像版本
         id: version
@@ -20,9 +64,12 @@ jobs:
         run: |
           BASE_VERSION="$(node -p "require('./package.json').version")"
           IMAGE_VERSION="${BASE_VERSION}-build.${GITHUB_RUN_NUMBER}"
+          SOURCE_SHORT_SHA="$(git rev-parse --short=7 HEAD)"
           echo "base=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "image=${IMAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "source_short_sha=${SOURCE_SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "本次镜像版本：${IMAGE_VERSION}"
+          echo "源码 SHA：${SOURCE_SHORT_SHA}"
 
       - name: 配置 Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -41,7 +88,7 @@ jobs:
           tags: |
             type=raw,value=${{ steps.version.outputs.image }}
             type=raw,value=latest
-            type=sha,prefix=sha-
+            type=raw,value=sha-${{ steps.version.outputs.source_short_sha }}
 
       - name: 构建并发布 Quant All-in-One
         uses: docker/build-push-action@v6
@@ -54,3 +101,4 @@ jobs:
           labels: |
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.version=${{ steps.version.outputs.image }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
