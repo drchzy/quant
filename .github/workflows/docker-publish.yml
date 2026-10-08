@@ -14,6 +14,16 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
+      - name: 读取本次镜像版本
+        id: version
+        shell: bash
+        run: |
+          BASE_VERSION="$(node -p "require('./package.json').version")"
+          IMAGE_VERSION="${BASE_VERSION}-build.${GITHUB_RUN_NUMBER}"
+          echo "base=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "本次镜像版本：${IMAGE_VERSION}"
+
       - name: 配置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -29,9 +39,9 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/quant
           tags: |
+            type=raw,value=${{ steps.version.outputs.image }}
             type=raw,value=latest
-            type=ref,event=tag
-            type=sha
+            type=sha,prefix=sha-
 
       - name: 构建并发布 Quant All-in-One
         uses: docker/build-push-action@v6
@@ -41,4 +51,6 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.version.outputs.image }}
