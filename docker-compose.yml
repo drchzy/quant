@@ -31,6 +31,62 @@ services:
       timeout: 5s
       retries: 3
 
+  stock-select:
+    image: ${STOCK_SELECT_IMAGE:-drchzy/quant-stock-select:latest}
+    build:
+      context: .
+      dockerfile: services/stock-select/Dockerfile
+    container_name: quant-stock-select
+    restart: unless-stopped
+    depends_on:
+      market-data:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8090
+      TZ: ${TZ:-Asia/Shanghai}
+      SELECT_DATABASE_PATH: /app/data/select.duckdb
+      MARKET_DATA_URL: http://market-data:8080
+      AUTO_SELECT_ENABLED: ${AUTO_SELECT_ENABLED:-true}
+      SELECT_CRON: ${SELECT_CRON:-40 16 * * 1-5}
+      SELECT_TOP_COUNT: ${SELECT_TOP_COUNT:-10}
+      SELECT_MAIN_COUNT: ${SELECT_MAIN_COUNT:-3}
+      SELECT_EXCLUDE_BSE: ${SELECT_EXCLUDE_BSE:-true}
+      SELECT_EXCLUDE_STAR: ${SELECT_EXCLUDE_STAR:-true}
+      SELECT_EXCLUDE_ST: ${SELECT_EXCLUDE_ST:-true}
+      SELECT_MIN_PRICE: ${SELECT_MIN_PRICE:-3}
+      SELECT_MIN_AMOUNT: ${SELECT_MIN_AMOUNT:-100000000}
+      SELECT_MIN_MARKET_CAP: ${SELECT_MIN_MARKET_CAP:-2000000000}
+      SELECT_MAX_MARKET_CAP: ${SELECT_MAX_MARKET_CAP:-100000000000}
+      SELECT_MIN_TURNOVER: ${SELECT_MIN_TURNOVER:-1}
+      SELECT_MAX_TURNOVER: ${SELECT_MAX_TURNOVER:-18}
+      SELECT_MIN_PCT: ${SELECT_MIN_PCT:--3}
+      SELECT_MAX_PCT: ${SELECT_MAX_PCT:-7}
+      SELECT_MIN_SCORE: ${SELECT_MIN_SCORE:-55}
+      PLAN_NO_CHASE_PCT: ${PLAN_NO_CHASE_PCT:-4}
+      PLAN_TAKE_PROFIT_1_PCT: ${PLAN_TAKE_PROFIT_1_PCT:-4}
+      PLAN_TAKE_PROFIT_2_PCT: ${PLAN_TAKE_PROFIT_2_PCT:-6}
+      PLAN_MAX_LOSS_PCT: ${PLAN_MAX_LOSS_PCT:-3}
+      PLAN_TRAILING_START_PCT: ${PLAN_TRAILING_START_PCT:-4}
+      PLAN_TRAILING_DRAWDOWN_PCT: ${PLAN_TRAILING_DRAWDOWN_PCT:-2}
+      PLAN_MAX_POSITION_PCT: ${PLAN_MAX_POSITION_PCT:-50}
+      PLAN_TIME_STOP_DAYS: ${PLAN_TIME_STOP_DAYS:-2}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   web:
     image: ${WEB_IMAGE:-drchzy/quant-web:latest}
     build:
@@ -40,6 +96,8 @@ services:
     restart: unless-stopped
     depends_on:
       market-data:
+        condition: service_healthy
+      stock-select:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-8088}:80"

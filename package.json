@@ -1,14 +1,17 @@
 {
   "name": "quant",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "workspaces": ["services/*", "apps/*"],
   "scripts": {
     "dev:market-data": "npm --workspace @quant/market-data run dev",
     "build:market-data": "npm --workspace @quant/market-data run build",
     "start:market-data": "npm --workspace @quant/market-data run start",
+    "dev:stock-select": "npm --workspace @quant/stock-select run dev",
+    "build:stock-select": "npm --workspace @quant/stock-select run build",
+    "start:stock-select": "npm --workspace @quant/stock-select run start",
     "dev:web": "npm --workspace @quant/web run dev",
     "build:web": "npm --workspace @quant/web run build",
-    "build": "npm run build:market-data && npm run build:web"
+    "build": "npm run build:market-data && npm run build:stock-select && npm run build:web"
   }
 }
