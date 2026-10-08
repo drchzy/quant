@@ -541,6 +541,22 @@ export async function getMinute(
   refresh = true
 ) {
   if (refresh) {
+    // 采集桥接刚写入的当日/近期分钟K优先读取，避免再次请求无法访问的上游。
+    const latestImport = await one<{ trade_time: string }>(
+      `SELECT MAX(trade_time)::VARCHAR AS trade_time
+       FROM minute_price
+       WHERE code = ? AND period = ? AND source = 'external_eastmoney'`,
+      [code, period]
+    );
+    const importedAt = latestImport?.trade_time
+      ? Date.parse(latestImport.trade_time.slice(0, 10) + 'T00:00:00Z')
+      : NaN;
+    if (Number.isFinite(importedAt) && Date.now() - importedAt < 7 * 86400000) {
+      refresh = false;
+    }
+  }
+
+  if (refresh) {
     const result = await fromEnabledSources('minute', (source) => fetchMinuteBySource(source, code, period as 1 | 5 | 15 | 30 | 60, limit), (rows) => rows.length > 0);
 
     for (const item of result.data) {
@@ -938,6 +954,27 @@ export async function getStockQuote(code: string) {
 }
 
 export async function getStockIntraday(code: string, fallbackMinute?: any[]) {
+  // 优先使用外部桥接写入的近期分时数据，不再向本机无法访问的东财重试。
+  const cached = await all<any>(
+    `SELECT trade_time::VARCHAR AS datetime, price, avg_price AS avgPrice,
+       volume, amount, pct
+     FROM intraday_trend
+     WHERE code = ? AND trade_time >= (now() - INTERVAL 7 DAY)
+     ORDER BY trade_time DESC
+     LIMIT 500`,
+    [code]
+  );
+  if (cached.length > 0) {
+    const latestDate = String(cached[0].datetime).slice(0, 10);
+    return {
+      source: 'external_eastmoney',
+      degraded: true,
+      data: cached.filter((row) => String(row.datetime).startsWith(latestDate))
+        .reverse().map((row) => ({
+          ...row, time: String(row.datetime).slice(11, 16)
+        }))
+    };
+  }
   // AI 接口传入已经按优先级获取的分钟K，不能再额外访问东财。
   if (!fallbackMinute) {
     const minuteSources = await getEnabledSources('minute').catch(() => [] as DataSourceId[]);
