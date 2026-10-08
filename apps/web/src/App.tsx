@@ -92,11 +92,13 @@ function MarketPage() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
 
-  const load = async () => {
+  const load = async (live = false) => {
     setError('');
     try {
       setData(
-        await apiGet('/market/overview?live=true')
+        await apiGet(
+          '/market/overview?live=' + (live ? 'true' : 'false')
+        )
       );
     } catch (error) {
       setError(
@@ -106,7 +108,8 @@ function MarketPage() {
   };
 
   useEffect(() => {
-    void load();
+    // 默认读本地快照，避免打开首页就请求全市场东财实时接口。
+    void load(false);
   }, []);
 
   if (error) {
@@ -124,8 +127,17 @@ function MarketPage() {
           <h2>市场总览</h2>
           <p>指数、涨跌家数、活跃股票和板块强弱</p>
         </div>
-        <button onClick={() => void load()}>刷新</button>
+        <button onClick={() => void load(true)}>刷新实时</button>
       </div>
+
+      {data.degraded && (
+        <div className="notice">
+          实时数据源暂不可用，当前展示本地最近一次成功数据。
+          {(data.warnings || []).length > 0 && (
+            <span> {data.warnings[0]}</span>
+          )}
+        </div>
+      )}
 
       <div className="index-grid">
         {data.indexes.map((item: any) => (
