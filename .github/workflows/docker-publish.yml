@@ -61,6 +61,25 @@ jobs:
           tags: ${{ steps.select_meta.outputs.tags }}
           labels: ${{ steps.select_meta.outputs.labels }}
 
+      - name: 生成 trade-manager 标签
+        id: trade_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/quant-trade-manager
+          tags: |
+            type=raw,value=latest
+            type=ref,event=tag
+            type=sha
+
+      - name: 发布 trade-manager
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/trade-manager/Dockerfile
+          push: true
+          tags: ${{ steps.trade_meta.outputs.tags }}
+          labels: ${{ steps.trade_meta.outputs.labels }}
+
       - name: 生成 Web 标签
         id: web_meta
         uses: docker/metadata-action@v5
