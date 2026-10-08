@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { config } from './config.js';
 import { runSelect } from './select.js';
+import { reviewPending } from './review.js';
 
 /**
  * 默认工作日16:40执行。
@@ -16,6 +17,11 @@ export function startScheduler(): void {
     config.selectCron,
     async () => {
       try {
+        const review = await reviewPending();
+        console.log(
+          `候选复盘完成：${review.reviewedRuns} 个批次，${review.reviewedStocks} 只股票`
+        );
+
         const result = await runSelect();
         console.log(
           `自动选股完成：${result.tradeDate}，候选 ${result.count} 只`
