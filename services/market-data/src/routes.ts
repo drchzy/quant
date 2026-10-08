@@ -8,6 +8,8 @@ import {
   getStock,
   getStockList,
   getTechnicalStocks,
+  getFuturePrices,
+  getTradeDates,
   searchStocks
 } from './market.js';
 import {
@@ -49,13 +51,43 @@ export async function registerRoutes(
   });
 
   app.get('/api/v1/market/technical', async (request) => {
-    const query = request.query as { days?: string };
+    const query = request.query as {
+      days?: string;
+      date?: string;
+    };
     const days = Math.min(
       Math.max(Number(query.days || 30), 21),
       120
     );
 
-    return getTechnicalStocks(days);
+    return getTechnicalStocks(days, query.date);
+  });
+
+  app.post('/api/v1/market/future-prices', async (request, reply) => {
+    const body = (request.body || {}) as {
+      codes?: string[];
+      afterDate?: string;
+      days?: number;
+    };
+
+    if (!Array.isArray(body.codes) || !body.afterDate) {
+      return reply.code(400).send({
+        error: 'codes 和 afterDate 不能为空'
+      });
+    }
+
+    return getFuturePrices(
+      body.codes,
+      body.afterDate,
+      Number(body.days || 3)
+    );
+  });
+
+  app.get('/api/v1/market/trade-dates', async (request) => {
+    const query = request.query as { limit?: string };
+    return {
+      data: await getTradeDates(Number(query.limit || 60))
+    };
   });
 
   app.get('/api/v1/sectors', async (request, reply) => {
