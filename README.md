@@ -259,3 +259,36 @@ docs/dockerhub/quant.md
 Quant 用于行情研究、策略筛选、回测和交易纪律辅助，不保证收益。
 
 trade-manager 不会自动连接券商下单；实际买入和卖出仍需要用户手工确认。
+
+
+## 行情数据源降级
+
+为避免东方财富公开接口触发 IP 风控后整个平台不可用，market-data 现在采用：
+
+```text
+实时全市场 / 实时报价 / 分时
+  push2delay.eastmoney.com
+        ↓ 失败
+  push2.eastmoney.com
+        ↓ 仍失败
+  页面回退 DuckDB 最近成功数据
+
+日K / 分钟K
+  push2his.eastmoney.com
+        ↓ 失败
+  腾讯财经 K 线备用源
+```
+
+所有东财请求统一串行限速、指数退避重试并带缓存，避免页面、选股和盘中执行分别请求上游造成同一出口 IP 被限流。
+
+数据源状态：
+
+```text
+GET /api/v1/market/source-status
+```
+
+健康检查也会返回最近的数据源状态：
+
+```text
+GET /health
+```
