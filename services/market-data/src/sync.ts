@@ -89,7 +89,7 @@ async function createJob(
   await run(
     `INSERT INTO sync_job
       (id, job_type, status, total, done, message, started_at, finished_at)
-     VALUES (?, ?, 'queued', 0, 0, ?, current_timestamp, NULL)`,
+     VALUES (?, ?, 'queued', 0, 0, ?, now(), NULL)`,
     [
       id,
       jobType,
@@ -316,7 +316,7 @@ async function saveStock(item: {
   await run(
     `INSERT OR REPLACE INTO stock
       (code, name, market, market_name, updated_at)
-     VALUES (?, ?, ?, ?, current_timestamp)`,
+     VALUES (?, ?, ?, ?, now())`,
     [
       item.code,
       item.name,
@@ -337,7 +337,7 @@ async function saveDaily(
       volume, amount, pct, change, amplitude, turnover,
       pe, pb, volume_ratio, total_market_cap, float_market_cap,
       source, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
     ON CONFLICT (code, trade_date) DO UPDATE SET
       open = COALESCE(excluded.open, daily_price.open),
       close = COALESCE(excluded.close, daily_price.close),
@@ -356,7 +356,7 @@ async function saveDaily(
       total_market_cap = COALESCE(excluded.total_market_cap, daily_price.total_market_cap),
       float_market_cap = COALESCE(excluded.float_market_cap, daily_price.float_market_cap),
       source = excluded.source,
-      updated_at = current_timestamp`,
+      updated_at = now()`,
     [
       item.code,
       tradeDate,
@@ -560,7 +560,7 @@ export async function syncSectors(
           await run(
             `INSERT OR REPLACE INTO sector
               (type, code, name, price, pct, main_inflow, up_count, down_count, lead_stock, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
             [
               item.type,
               item.code,
@@ -859,7 +859,7 @@ export async function syncIndexes(
       await run(
         `INSERT OR REPLACE INTO market_index
           (code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
         [
           item.code,
           item.name,
@@ -905,7 +905,7 @@ export async function stopAllSyncs() {
     `UPDATE sync_job
      SET status = 'cancelled',
          message = '用户一键停止全部同步',
-         finished_at = current_timestamp
+         finished_at = now()
      WHERE status IN ('queued', 'running')`
   );
 
@@ -916,7 +916,7 @@ export async function stopAllSyncs() {
            WHEN message IS NULL OR message = '' THEN '用户一键停止全部同步'
            ELSE message
          END,
-         finished_at = current_timestamp
+         finished_at = now()
      WHERE status IN ('waiting', 'running')`
   );
 
