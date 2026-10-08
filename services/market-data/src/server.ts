@@ -20,7 +20,7 @@ await app.register(cors, {
 app.get('/health', async () => ({
   status: 'ok',
   service: 'market-data',
-  dataSource: 'eastmoney',
+  dataSource: 'eastmoney + tencent fallback',
   database: config.databasePath,
   time: new Date().toISOString()
 }));
