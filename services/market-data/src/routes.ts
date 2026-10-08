@@ -1,4 +1,7 @@
 import type { FastifyInstance } from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
+import { config } from './config.js';
+import { importBridgeRows, getBridgeCounts } from './external-bridge.js';
 import {
   getAiStock,
   getDaily,
@@ -41,6 +44,40 @@ function toBoolean(value: unknown, defaultValue: boolean): boolean {
 export async function registerRoutes(
   app: FastifyInstance
 ): Promise<void> {
+  // 外部桥接写入只接受单独配置的令牌，不能依赖前端页面是否登录。
+  const checkBridgeToken = (token: unknown): boolean => {
+    const expected = config.bridgeImportToken.trim();
+    if (expected.length < 16 || typeof token !== 'string') return false;
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+
+  app.post('/api/v1/bridge/import', { bodyLimit: 1_048_576 }, async (request, reply) => {
+    if (!config.bridgeImportToken.trim()) {
+      return reply.code(503).send({ error: '外部桥接未开启：请在 web/.env 设置 BRIDGE_IMPORT_TOKEN 并重启服务' });
+    }
+    if (!checkBridgeToken(request.headers['x-bridge-token'])) {
+      return reply.code(401).send({ error: '桥接令牌无效' });
+    }
+    try {
+      const result = await importBridgeRows(request.body);
+      return { success: true, ...result };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get('/api/v1/bridge/status', async (request, reply) => {
+    if (!config.bridgeImportToken.trim()) {
+      return reply.code(503).send({ enabled: false, error: '服务端 BRIDGE_IMPORT_TOKEN 未配置' });
+    }
+    if (!checkBridgeToken(request.headers['x-bridge-token'])) {
+      return reply.code(401).send({ error: '桥接令牌无效' });
+    }
+    return { enabled: true, counts: await getBridgeCounts() };
+  });
+
   app.get('/api/v1/market/overview', async (request) => {
     const query = request.query as { live?: string };
     return getMarketOverview(toBoolean(query.live, true));

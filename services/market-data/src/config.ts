@@ -22,6 +22,8 @@ export const config = {
   databasePath:
     process.env.DATABASE_PATH || path.resolve(process.cwd(), 'data/market.duckdb'),
   syncEnabled: readBoolean('SYNC_ENABLED', true),
+  // 仅在配置安全令牌后开放外部数据写入功能。
+  bridgeImportToken: process.env.BRIDGE_IMPORT_TOKEN || '',
   dailySyncCron: process.env.DAILY_SYNC_CRON || '10 16 * * 1-5',
   eastmoneyTimeoutMs: readNumber('EASTMONEY_TIMEOUT_MS', 10_000),
 

@@ -73,6 +73,7 @@ jobs:
         run: |
           mkdir -p ci-web/data
           cp web/.env ci-web/.env
+          echo 'BRIDGE_IMPORT_TOKEN="ci-bridge-secret-1234567890"' >> ci-web/.env
           sed -i 's/SYNC_ENABLED="true"/SYNC_ENABLED="false"/' ci-web/.env
           sed -i 's/AUTO_SELECT_ENABLED="true"/AUTO_SELECT_ENABLED="false"/' ci-web/.env
           sed -i 's/TRADE_MONITOR_ENABLED="true"/TRADE_MONITOR_ENABLED="false"/' ci-web/.env
@@ -102,6 +103,9 @@ jobs:
           done
           docker logs quant-ci
           exit 1
+
+      - name: 测试外部采集桥接接口及 DuckDB 入库
+        run: node services/market-data/test/bridge-smoke.mjs
 
       - name: 输出容器日志
         if: failure()
