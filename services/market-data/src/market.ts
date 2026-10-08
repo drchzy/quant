@@ -376,8 +376,27 @@ function roundNumber(value: number | null, digits = 3): number | null {
  * 这里仍属于“行情加工层”，只计算客观指标，不做选股结论。
  * stock-select 服务会基于这些字段执行具体策略。
  */
-export async function getTechnicalStocks(days = 30) {
+export async function getTechnicalStocks(days = 30, tradeDate?: string) {
   const safeDays = Math.min(Math.max(days, 21), 120);
+
+  // 回测时允许指定历史交易日；不传日期时使用数据库里的最新数据。
+  const effectiveDateRow = tradeDate
+    ? await one<{ trade_date: string }>(
+        `SELECT MAX(trade_date)::VARCHAR AS trade_date
+         FROM daily_price
+         WHERE trade_date <= CAST(? AS DATE)`,
+        [tradeDate]
+      )
+    : await one<{ trade_date: string }>(
+        `SELECT MAX(trade_date)::VARCHAR AS trade_date
+         FROM daily_price`
+      );
+
+  const effectiveDate = effectiveDateRow?.trade_date?.slice(0, 10) || null;
+
+  if (!effectiveDate) {
+    return { tradeDate: null, count: 0, data: [] };
+  }
 
   const rows = await all<any>(
     `WITH ranked AS (
@@ -408,12 +427,13 @@ export async function getTechnicalStocks(days = 30) {
          ) AS rn
        FROM daily_price d
        JOIN stock s ON s.code = d.code
+       WHERE d.trade_date <= CAST(? AS DATE)
      )
      SELECT *
      FROM ranked
      WHERE rn <= ?
      ORDER BY code, trade_date`,
-    [safeDays]
+    [effectiveDate, safeDays]
   );
 
   const groups = new Map<string, any[]>();
@@ -430,6 +450,11 @@ export async function getTechnicalStocks(days = 30) {
     if (list.length < 20) continue;
 
     const current = list.at(-1)!;
+
+    // 停牌股票可能最后一根K线早于目标交易日，回测时不把它当作当天候选。
+    if (String(current.trade_date).slice(0, 10) !== effectiveDate) {
+      continue;
+    }
     const previous = list.length >= 2 ? list.at(-2)! : null;
     const closes = list.map((row) => Number(row.close));
     const volumes = list.map((row) => Number(row.volume || 0));
@@ -537,17 +562,88 @@ export async function getTechnicalStocks(days = 30) {
   }
 
   return {
-    tradeDate:
-      data.length > 0
-        ? data.reduce(
-            (latest, item) =>
-              item.tradeDate > latest ? item.tradeDate : latest,
-            data[0].tradeDate
-          )
-        : null,
+    tradeDate: effectiveDate,
     count: data.length,
     data
   };
+}
+
+/**
+ * 返回若干股票在指定交易日之后的日K。
+ * 主要给选股复盘和回测使用，避免策略服务逐只请求。
+ */
+export async function getFuturePrices(
+  codes: string[],
+  afterDate: string,
+  days = 3
+) {
+  const safeCodes = [...new Set(codes)]
+    .filter((code) => /^\d{6}$/.test(code))
+    .slice(0, 100);
+  const safeDays = Math.min(Math.max(days, 1), 10);
+
+  if (safeCodes.length === 0) {
+    return { afterDate, days: safeDays, count: 0, data: [] };
+  }
+
+  const placeholders = safeCodes.map(() => '?').join(',');
+
+  const rows = await all<any>(
+    `WITH future AS (
+       SELECT
+         d.code,
+         d.trade_date,
+         d.open,
+         d.close,
+         d.high,
+         d.low,
+         d.pre_close,
+         d.volume,
+         d.amount,
+         d.pct,
+         d.change,
+         d.amplitude,
+         d.turnover,
+         ROW_NUMBER() OVER (
+           PARTITION BY d.code
+           ORDER BY d.trade_date
+         ) AS rn
+       FROM daily_price d
+       WHERE d.code IN (${placeholders})
+         AND d.trade_date > CAST(? AS DATE)
+     )
+     SELECT *
+     FROM future
+     WHERE rn <= ?
+     ORDER BY code, trade_date`,
+    [...safeCodes, afterDate, safeDays]
+  );
+
+  return {
+    afterDate,
+    days: safeDays,
+    count: rows.length,
+    data: rows
+  };
+}
+
+/**
+ * 返回数据库最近的交易日列表，供历史回测逐日重放。
+ */
+export async function getTradeDates(limit = 60) {
+  const safeLimit = Math.min(Math.max(limit, 1), 250);
+
+  const rows = await all<{ trade_date: string }>(
+    `SELECT DISTINCT trade_date::VARCHAR AS trade_date
+     FROM daily_price
+     ORDER BY trade_date DESC
+     LIMIT ?`,
+    [safeLimit]
+  );
+
+  return rows
+    .map((row) => row.trade_date.slice(0, 10))
+    .reverse();
 }
 
 export async function getSectorList(
