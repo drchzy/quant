@@ -1158,15 +1158,17 @@ function TradingPage() {
                   <td>{row.trailing_stop == null ? '-' : Number(row.trailing_stop).toFixed(2)}</td>
                   <td className="reason-cell">{row.signal_reason || '-'}</td>
                   <td>
-                    {!row.entry_price &&
-                      !['invalid', 'expired'].includes(row.state) && (
-                        <button
-                          className="small-button"
-                          onClick={() => void buy(row)}
-                        >
-                          确认买入
-                        </button>
-                      )}
+                    {!row.entry_price && row.state === 'buy_ready' && (
+                      <button
+                        className="small-button"
+                        onClick={() => void buy(row)}
+                      >
+                        确认买入
+                      </button>
+                    )}
+                    {!row.entry_price && row.state !== 'buy_ready' && (
+                      <span className="muted-text">按计划等待</span>
+                    )}
                     {row.entry_price && row.state !== 'closed' && (
                       <button
                         className="small-button danger-button"
