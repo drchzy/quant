@@ -3,7 +3,6 @@ import { config } from './config.js';
 import { calculateIndicators } from './indicator.js';
 import {
   buildSecid,
-  getIntradayTrend,
   getMarketDataSourceStatus,
   mainIndexes
 } from './eastmoney.js';
@@ -13,6 +12,7 @@ import {
   fetchSnapshotBySource,
   fetchIndexesBySource,
   fetchStockQuoteBySource,
+  fetchEastmoneyIntraday,
   type IndexQuote,
   fetchSectorsBySource,
   fetchDailyBySource,
@@ -944,7 +944,7 @@ export async function getStockIntraday(code: string, fallbackMinute?: any[]) {
     // 仅当 Push2 本身排在分钟能力优先级第一时才尝试专用分时。
     if (minuteSources[0] === 'eastmoney_push2' && await isPush2Enabled()) {
       try {
-        const data = await getIntradayTrend(buildSecid(code));
+        const data = await fetchEastmoneyIntraday(code);
         if (data.length > 0) {
           return { source: 'eastmoney_push2', degraded: false, data };
         }
