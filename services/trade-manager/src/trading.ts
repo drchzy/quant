@@ -95,6 +95,7 @@ async function saveSignal(
     highestPrice?: number | null;
     trailingStop?: number | null;
     holdDays?: number;
+    pendingSignal?: TradeSignal | null;
   }
 ) {
   const changed =
@@ -107,6 +108,7 @@ async function saveSignal(
       state = ?,
       signal = ?,
       signal_reason = ?,
+      pending_signal = ?,
       current_price = ?,
       day_high = ?,
       day_low = ?,
@@ -125,6 +127,9 @@ async function saveSignal(
       values.state,
       values.signal,
       values.reason,
+      Object.prototype.hasOwnProperty.call(values, 'pendingSignal')
+        ? values.pendingSignal
+        : row.pending_signal,
       values.live.price,
       values.live.high,
       values.live.low,
@@ -480,7 +485,30 @@ async function evaluatePlan(row: any, live: LiveStock) {
       live,
       highestPrice: replay.highest,
       trailingStop: replay.trailingStop,
-      holdDays
+      holdDays,
+      pendingSignal: replay.stopSignal || 'TAKE_PROFIT_2'
+    });
+    return;
+  }
+
+  // 昨日已经触发退出但受T+1限制时，今天第一时间转为可卖，不重新放宽纪律。
+  if (row.state === 't1_locked' && canSell) {
+    const pending =
+      row.pending_signal === 'TAKE_PROFIT_2'
+        ? 'TAKE_PROFIT_2'
+        : row.pending_signal === 'TRAILING_STOP'
+          ? 'TRAILING_STOP'
+          : 'STOP_LOSS';
+
+    await saveSignal(row, {
+      state: 'sell_ready',
+      signal: pending,
+      reason: `T+1限制已解除；昨日已触发${pending === 'TAKE_PROFIT_2' ? '第二止盈' : pending === 'TRAILING_STOP' ? '移动止盈' : '止损'}条件，优先执行卖出`,
+      live,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
+      holdDays,
+      pendingSignal: null
     });
     return;
   }
@@ -496,7 +524,8 @@ async function evaluatePlan(row: any, live: LiveStock) {
       live,
       highestPrice: replay.highest,
       trailingStop: replay.trailingStop,
-      holdDays
+      holdDays,
+      pendingSignal: null
     });
     return;
   }
@@ -509,7 +538,8 @@ async function evaluatePlan(row: any, live: LiveStock) {
       live,
       highestPrice: replay.highest,
       trailingStop: replay.trailingStop,
-      holdDays
+      holdDays,
+      pendingSignal: null
     });
     return;
   }
@@ -526,7 +556,8 @@ async function evaluatePlan(row: any, live: LiveStock) {
       live,
       highestPrice: replay.highest,
       trailingStop: replay.trailingStop,
-      holdDays
+      holdDays,
+      pendingSignal: null
     });
     return;
   }
@@ -723,6 +754,7 @@ export async function confirmBuy(
       state = 'holding',
       signal = 'HOLD',
       signal_reason = '已手工确认买入，开始持仓监控',
+      pending_signal = NULL,
       entry_date = CAST(? AS DATE),
       entry_time = ?,
       last_seen_date = CAST(? AS DATE),
@@ -818,6 +850,7 @@ export async function confirmSell(
       state = 'closed',
       signal = 'CLOSED',
       signal_reason = ?,
+      pending_signal = NULL,
       exit_date = CAST(? AS DATE),
       exit_time = ?,
       exit_price = ?,
