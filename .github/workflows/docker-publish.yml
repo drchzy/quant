@@ -3,6 +3,8 @@ name: Publish Docker Images
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "publish/docker-amd64"
     tags:
       - "v*"
 
