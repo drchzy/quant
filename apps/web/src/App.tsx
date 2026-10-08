@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiGet, apiPost, formatMoney, formatPct } from './api';
 import { DailyChart, MinuteChart } from './charts';
 
-type Page = 'market' | 'stock' | 'sector' | 'select' | 'review' | 'sync';
+type Page = 'market' | 'stock' | 'sector' | 'select' | 'trading' | 'review' | 'sync';
 
 function Change({ value }: { value: unknown }) {
   const number = Number(value || 0);
@@ -868,6 +868,420 @@ function ReviewPage() {
   );
 }
 
+
+function TradingPage() {
+  const [data, setData] = useState<any>(null);
+  const [history, setHistory] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [manualCode, setManualCode] = useState('');
+  const [manualPrice, setManualPrice] = useState('');
+  const [manualQuantity, setManualQuantity] = useState('');
+  const [manualDate, setManualDate] = useState(() =>
+    new Intl.DateTimeFormat('en-CA').format(new Date())
+  );
+
+  const stateText: Record<string, string> = {
+    waiting: '等待',
+    buy_ready: '可买',
+    no_chase: '不追',
+    invalid: '失效',
+    holding: '持有',
+    trailing: '移动止盈',
+    t1_locked: 'T+1锁定',
+    sell_ready: '可卖',
+    closed: '已结束',
+    expired: '已过期'
+  };
+
+  const signalText: Record<string, string> = {
+    WAIT_NEXT_DAY: '等待次日',
+    WAIT: '等待',
+    WAIT_PULLBACK: '等回落',
+    BUY: '买入条件',
+    NO_CHASE: '不追高',
+    INVALID: '候选失效',
+    HOLD: '继续持有',
+    TAKE_PROFIT_1: '第一止盈',
+    TAKE_PROFIT_2: '第二止盈',
+    TRAILING_ACTIVE: '移动止盈启动',
+    TRAILING_STOP: '移动止盈退出',
+    STOP_LOSS: '止损',
+    TIME_EXIT: '时间退出',
+    T1_LOCKED_RISK: 'T+1风险',
+    CLOSED: '已卖出',
+    EXPIRED: '计划过期'
+  };
+
+  const load = async () => {
+    setError('');
+    try {
+      const [today, closed, eventRows] = await Promise.all([
+        apiGet<any>('/trading/today'),
+        apiGet<any>('/trading/history?limit=30'),
+        apiGet<any>('/trading/events?limit=30')
+      ]);
+
+      setData(today);
+      setHistory(closed.data || []);
+      setEvents(eventRows.data || []);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  useEffect(() => {
+    void load();
+
+    const timer = window.setInterval(() => {
+      void load();
+    }, 15000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    setError('');
+    try {
+      await apiPost('/trading/refresh');
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const buy = async (row: any) => {
+    const value = window.prompt(
+      '确认实际买入价',
+      String(row.current_price || row.plan?.entryHigh || '')
+    );
+    if (!value) return;
+
+    const quantity = window.prompt(
+      '买入数量（股，可留空）',
+      ''
+    );
+
+    try {
+      await apiPost(
+        '/trading/plans/' + encodeURIComponent(row.id) + '/buy',
+        {
+          price: Number(value),
+          quantity: quantity ? Number(quantity) : undefined
+        }
+      );
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  const sell = async (row: any) => {
+    const value = window.prompt(
+      '确认实际卖出价',
+      String(row.current_price || row.exit_price || '')
+    );
+    if (!value) return;
+
+    try {
+      await apiPost(
+        '/trading/plans/' + encodeURIComponent(row.id) + '/sell',
+        {
+          price: Number(value),
+          reason: row.signal_reason || '手工确认卖出'
+        }
+      );
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  const addPosition = async () => {
+    if (!/^\d{6}$/.test(manualCode.trim())) {
+      setError('请输入6位股票代码');
+      return;
+    }
+    if (!(Number(manualPrice) > 0)) {
+      setError('请输入正确的成本价');
+      return;
+    }
+
+    try {
+      await apiPost('/trading/positions', {
+        code: manualCode.trim(),
+        entryDate: manualDate,
+        entryPrice: Number(manualPrice),
+        quantity: manualQuantity
+          ? Number(manualQuantity)
+          : undefined
+      });
+
+      setManualCode('');
+      setManualPrice('');
+      setManualQuantity('');
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  const rows = data?.plans || [];
+
+  return (
+    <>
+      <div className="page-title">
+        <div>
+          <h2>盘中执行</h2>
+          <p>昨晚定计划，盘中只看状态。系统不会自动下单，成交必须手工确认。</p>
+        </div>
+        <button disabled={refreshing} onClick={() => void refresh()}>
+          {refreshing ? '正在刷新…' : '刷新行情'}
+        </button>
+      </div>
+
+      {error && <div className="error">{error}</div>}
+
+      {data && (
+        <div className="stat-grid trading-stat-grid">
+          <div className="card">
+            <b>{data.counts?.buyReady || 0}</b>
+            <span>进入买入区</span>
+          </div>
+          <div className="card">
+            <b>{data.counts?.holding || 0}</b>
+            <span>当前持仓</span>
+          </div>
+          <div className="card">
+            <b>{data.counts?.sellReady || 0}</b>
+            <span>卖出信号</span>
+          </div>
+          <div className="card">
+            <b>{data.counts?.t1Locked || 0}</b>
+            <span>T+1锁定风险</span>
+          </div>
+        </div>
+      )}
+
+      {(data?.actionable || []).length > 0 && (
+        <section className="panel action-panel">
+          <h3>需要处理</h3>
+          <div className="action-list">
+            {data.actionable.map((row: any) => (
+              <div className="action-item" key={row.id}>
+                <div>
+                  <b>{row.name} {row.code}</b>
+                  <span className={'trade-state state-' + row.state}>
+                    {stateText[row.state] || row.state}
+                  </span>
+                </div>
+                <p>{row.signal_reason}</p>
+                <strong>{row.current_price ?? '-'}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="panel">
+        <h3>今日计划与持仓</h3>
+        {rows.length === 0 ? (
+          <div className="notice">
+            暂无计划。收盘选股后会自动同步重点3只，也可以手工录入已有持仓。
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>股票</th>
+                <th>状态</th>
+                <th>信号</th>
+                <th>现价</th>
+                <th>买入区</th>
+                <th>成本</th>
+                <th>止损</th>
+                <th>第一止盈</th>
+                <th>移动保护</th>
+                <th>说明</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row: any) => (
+                <tr key={row.id}>
+                  <td>
+                    <b>{row.name}</b>
+                    <br />
+                    <small>{row.code}</small>
+                  </td>
+                  <td>
+                    <span className={'trade-state state-' + row.state}>
+                      {stateText[row.state] || row.state}
+                    </span>
+                  </td>
+                  <td>{signalText[row.signal] || row.signal}</td>
+                  <td>
+                    {row.current_price ?? '-'}
+                    <br />
+                    <Change value={row.pct} />
+                  </td>
+                  <td>
+                    {row.source === 'select'
+                      ? String(row.plan?.entryLow ?? '-') + ' - ' +
+                        String(row.plan?.entryHigh ?? '-')
+                      : '-'}
+                  </td>
+                  <td>{row.entry_price ?? '-'}</td>
+                  <td>{row.plan?.stopPrice ?? '-'}</td>
+                  <td>{row.plan?.takeProfit1 ?? '-'}</td>
+                  <td>{row.trailing_stop == null ? '-' : Number(row.trailing_stop).toFixed(2)}</td>
+                  <td className="reason-cell">{row.signal_reason || '-'}</td>
+                  <td>
+                    {!row.entry_price &&
+                      !['invalid', 'expired'].includes(row.state) && (
+                        <button
+                          className="small-button"
+                          onClick={() => void buy(row)}
+                        >
+                          确认买入
+                        </button>
+                      )}
+                    {row.entry_price && row.state !== 'closed' && (
+                      <button
+                        className="small-button danger-button"
+                        disabled={row.state === 't1_locked'}
+                        onClick={() => void sell(row)}
+                      >
+                        {row.state === 't1_locked' ? 'T+1锁定' : '确认卖出'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="panel">
+        <h3>录入已有持仓</h3>
+        <div className="manual-position-form">
+          <label>
+            股票代码
+            <input
+              value={manualCode}
+              onChange={(event) => setManualCode(event.target.value)}
+              placeholder="600186"
+            />
+          </label>
+          <label>
+            买入日期
+            <input
+              type="date"
+              value={manualDate}
+              onChange={(event) => setManualDate(event.target.value)}
+            />
+          </label>
+          <label>
+            成本价
+            <input
+              type="number"
+              step="0.01"
+              value={manualPrice}
+              onChange={(event) => setManualPrice(event.target.value)}
+              placeholder="11.46"
+            />
+          </label>
+          <label>
+            数量
+            <input
+              type="number"
+              step="100"
+              value={manualQuantity}
+              onChange={(event) => setManualQuantity(event.target.value)}
+              placeholder="可留空"
+            />
+          </label>
+          <button onClick={() => void addPosition()}>
+            加入监控
+          </button>
+        </div>
+        <p className="hint">
+          手工持仓默认使用当前纪律：约3%止损、4%/6%两档止盈、4%启动移动止盈。
+        </p>
+      </section>
+
+      {history.length > 0 && (
+        <section className="panel">
+          <h3>已结束交易</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>股票</th><th>买入日</th><th>成本</th>
+                <th>卖出日</th><th>卖出价</th><th>收益</th><th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((row: any) => (
+                <tr key={row.id}>
+                  <td>{row.name} {row.code}</td>
+                  <td>{String(row.entry_date || '').slice(0, 10)}</td>
+                  <td>{row.entry_price}</td>
+                  <td>{String(row.exit_date || '').slice(0, 10)}</td>
+                  <td>{row.exit_price}</td>
+                  <td><Change value={row.return_pct} /></td>
+                  <td>{row.exit_reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {events.length > 0 && (
+        <section className="panel">
+          <h3>最近状态变化</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th><th>代码</th><th>事件</th>
+                <th>状态</th><th>价格</th><th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((row: any) => (
+                <tr key={row.id}>
+                  <td>{String(row.market_time || row.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+                  <td>{row.code}</td>
+                  <td>{row.event_type}</td>
+                  <td>{stateText[row.to_state] || row.to_state || '-'}</td>
+                  <td>{row.price ?? '-'}</td>
+                  <td>{row.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
+  );
+}
+
 function SyncPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [days, setDays] = useState(120);
@@ -991,6 +1405,7 @@ export default function App() {
     ['stock', '股票查询'],
     ['sector', '板块对比'],
     ['select', '每日选股'],
+    ['trading', '盘中执行'],
     ['review', '策略复盘'],
     ['sync', '数据同步']
   ];
@@ -1021,6 +1436,7 @@ export default function App() {
         {page === 'stock' && <StockPage />}
         {page === 'sector' && <SectorPage />}
         {page === 'select' && <SelectPage />}
+        {page === 'trading' && <TradingPage />}
         {page === 'review' && <ReviewPage />}
         {page === 'sync' && <SyncPage />}
       </main>
