@@ -418,6 +418,20 @@ export async function startBacktest(
   tradeDays = 60,
   topCount = 3
 ) {
+  const running = await one<any>(
+    `SELECT id, trade_days, message
+     FROM backtest_run
+     WHERE status = 'running'
+     ORDER BY created_at DESC
+     LIMIT 1`
+  );
+
+  if (running) {
+    throw new Error(
+      `已有回测任务正在运行：${running.id}`
+    );
+  }
+
   const id = randomUUID();
   const safeDays = Math.min(Math.max(tradeDays, 20), 180);
   const safeTop = Math.min(Math.max(topCount, 1), 10);
