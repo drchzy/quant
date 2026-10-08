@@ -24,23 +24,38 @@ jobs:
       - name: 安装依赖
         run: npm install
 
-      - name: 编译后端和前端
+      - name: 编译全部服务和页面
         run: npm run build
 
-      - name: 启动后端并检查健康状态
+      - name: 启动 market-data
         shell: bash
         run: |
           mkdir -p data
-          SYNC_ENABLED=false DATABASE_PATH="$PWD/data/ci.duckdb" node services/market-data/dist/server.js > /tmp/market-data.log 2>&1 &
-          PID=$!
-          trap 'kill $PID || true' EXIT
+          SYNC_ENABLED=false DATABASE_PATH="$PWD/data/ci-market.duckdb" node services/market-data/dist/server.js > /tmp/market-data.log 2>&1 &
+          echo $! > /tmp/market-data.pid
           for i in {1..20}; do
             if curl -fsS http://127.0.0.1:8080/health; then
+              curl -fsS "http://127.0.0.1:8080/api/v1/market/technical?days=30"
               exit 0
             fi
             sleep 1
           done
           cat /tmp/market-data.log
+          exit 1
+
+      - name: 启动 stock-select
+        shell: bash
+        run: |
+          AUTO_SELECT_ENABLED=false           SELECT_DATABASE_PATH="$PWD/data/ci-select.duckdb"           MARKET_DATA_URL="http://127.0.0.1:8080"           node services/stock-select/dist/server.js > /tmp/stock-select.log 2>&1 &
+          echo $! > /tmp/stock-select.pid
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:8090/health; then
+              curl -fsS http://127.0.0.1:8090/api/v1/select/config
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/stock-select.log
           exit 1
 
       - name: 检查 Docker Compose
@@ -49,5 +64,15 @@ jobs:
       - name: 构建 market-data 镜像
         run: docker build -f services/market-data/Dockerfile -t quant-market-data:test .
 
+      - name: 构建 stock-select 镜像
+        run: docker build -f services/stock-select/Dockerfile -t quant-stock-select:test .
+
       - name: 构建 Web 镜像
         run: docker build -f apps/web/Dockerfile -t quant-web:test .
+
+      - name: 停止测试服务
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/stock-select.pid ]; then kill "$(cat /tmp/stock-select.pid)" || true; fi
+          if [ -f /tmp/market-data.pid ]; then kill "$(cat /tmp/market-data.pid)" || true; fi
