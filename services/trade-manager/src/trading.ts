@@ -118,7 +118,9 @@ async function saveSignal(
       trailing_stop = ?,
       hold_days = ?,
       updated_at = current_timestamp
-     WHERE id = ?`,
+     WHERE id = ?
+       AND state = ?
+       AND entry_price IS NOT DISTINCT FROM ?`,
     [
       values.state,
       values.signal,
@@ -133,11 +135,23 @@ async function saveSignal(
       values.highestPrice ?? nullableNumber(row.highest_price),
       values.trailingStop ?? nullableNumber(row.trailing_stop),
       values.holdDays ?? number(row.hold_days),
-      row.id
+      row.id,
+      row.state,
+      row.entry_price
     ]
   );
 
-  if (changed) {
+  const saved = await one<any>(
+    'SELECT state, signal, signal_reason FROM trade_plan WHERE id = ?',
+    [row.id]
+  );
+
+  if (
+    changed &&
+    saved?.state === values.state &&
+    saved?.signal === values.signal &&
+    saved?.signal_reason === values.reason
+  ) {
     await addEvent(
       row,
       'signal',
@@ -619,9 +633,20 @@ export async function expireTodayPlans() {
         signal = 'EXPIRED',
         signal_reason = '当日未确认买入，计划已过期',
         updated_at = current_timestamp
-       WHERE id = ?`,
+       WHERE id = ?
+         AND state = ?
+         AND entry_price IS NULL`,
+      [row.id, row.state]
+    );
+
+    const saved = await one<any>(
+      'SELECT state FROM trade_plan WHERE id = ?',
       [row.id]
     );
+
+    if (saved?.state !== 'expired') {
+      continue;
+    }
 
     await addEvent(
       row,
@@ -684,7 +709,9 @@ export async function confirmBuy(
       trailing_stop = NULL,
       hold_days = 1,
       updated_at = current_timestamp
-     WHERE id = ?`,
+     WHERE id = ?
+       AND state = 'buy_ready'
+       AND entry_price IS NULL`,
     [
       entryDate,
       marketTime,
@@ -697,6 +724,12 @@ export async function confirmBuy(
     ]
   );
 
+  const bought = await getPlan(id);
+
+  if (!bought?.entry_price) {
+    throw new Error('计划状态已经变化，请刷新后再确认买入');
+  }
+
   await addEvent(
     row,
     'buy_confirmed',
@@ -708,7 +741,7 @@ export async function confirmBuy(
     marketTime
   );
 
-  return getPlan(id);
+  return bought;
 }
 
 export async function confirmSell(
@@ -767,7 +800,9 @@ export async function confirmSell(
       exit_reason = ?,
       return_pct = ?,
       updated_at = current_timestamp
-     WHERE id = ?`,
+     WHERE id = ?
+       AND state <> 'closed'
+       AND entry_price IS NOT NULL`,
     [
       exitReason,
       String(exitTime).slice(0, 10),
@@ -778,6 +813,12 @@ export async function confirmSell(
       id
     ]
   );
+
+  const sold = await getPlan(id);
+
+  if (sold?.state !== 'closed') {
+    throw new Error('持仓状态已经变化，请刷新后再确认卖出');
+  }
 
   await addEvent(
     row,
@@ -790,7 +831,7 @@ export async function confirmSell(
     exitTime
   );
 
-  return getPlan(id);
+  return sold;
 }
 
 function manualPlan(entryPrice: number, input: any): TradePlanRule {
