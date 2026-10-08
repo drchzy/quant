@@ -1,0 +1,930 @@
+import { config } from './config.js';
+import type { MarketStock, SectorRow, SectorType } from './types.js';
+
+export type DataSourceId =
+  | 'sina'
+  | 'tencent'
+  | 'eastmoney_datacenter'
+  | 'eastmoney_push2'
+  | 'tushare';
+
+export type DataCapability =
+  | 'snapshot'
+  | 'daily'
+  | 'minute'
+  | 'sector';
+
+export interface DailyBar {
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  preClose?: number | null;
+  volume: number;
+  amount: number | null;
+  amplitude: number | null;
+  pct: number | null;
+  change: number | null;
+  turnover: number | null;
+}
+
+export interface DataSourceDefinition {
+  id: DataSourceId;
+  name: string;
+  description: string;
+  independent: boolean;
+  needsToken: boolean;
+  capabilities: DataCapability[];
+  defaultEnabled: boolean;
+  defaultPriority: number;
+}
+
+export const dataSourceDefinitions: DataSourceDefinition[] = [
+  {
+    id: 'sina',
+    name: '新浪财经',
+    description: '独立全市场快照源，适合每日全市场同步。',
+    independent: true,
+    needsToken: false,
+    capabilities: ['snapshot'],
+    defaultEnabled: true,
+    defaultPriority: 10
+  },
+  {
+    id: 'tencent',
+    name: '腾讯财经',
+    description: '独立日K/分钟K备用源，适合历史行情初始化。',
+    independent: true,
+    needsToken: false,
+    capabilities: ['daily', 'minute'],
+    defaultEnabled: true,
+    defaultPriority: 20
+  },
+  {
+    id: 'eastmoney_datacenter',
+    name: '东方财富数据中心',
+    description: '东方财富选股数据中心接口，不走 push2 集群。',
+    independent: false,
+    needsToken: false,
+    capabilities: ['snapshot'],
+    defaultEnabled: true,
+    defaultPriority: 30
+  },
+  {
+    id: 'eastmoney_push2',
+    name: '东方财富行情',
+    description: 'push2delay/push2 实时快照、push2his K线和板块。',
+    independent: false,
+    needsToken: false,
+    capabilities: ['snapshot', 'daily', 'minute', 'sector'],
+    defaultEnabled: true,
+    defaultPriority: 40
+  },
+  {
+    id: 'tushare',
+    name: 'Tushare Pro',
+    description: '官方 Token API；配置 TUSHARE_TOKEN 后可用于快照和日K。',
+    independent: true,
+    needsToken: true,
+    capabilities: ['snapshot', 'daily'],
+    defaultEnabled: false,
+    defaultPriority: 50
+  }
+];
+
+function number(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function nullable(value: unknown): number | null {
+  if (value === null || value === undefined || value === '' || value === '-') {
+    return null;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function marketByCode(code: string): number {
+  return /^(5|6|9)/.test(code) ? 1 : 0;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException('同步任务已取消', 'AbortError');
+  }
+}
+
+async function fetchText(
+  url: string,
+  options: RequestInit,
+  signal?: AbortSignal,
+  timeoutMs = config.eastmoneyTimeoutMs
+): Promise<string> {
+  throwIfAborted(signal);
+
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${new URL(url).hostname}`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+async function fetchJson(
+  url: string,
+  options: RequestInit,
+  signal?: AbortSignal,
+  timeoutMs = config.eastmoneyTimeoutMs
+): Promise<any> {
+  const text = await fetchText(url, options, signal, timeoutMs);
+  if (!text.trim()) throw new Error('上游返回空响应');
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`上游返回非 JSON：${text.slice(0, 120)}`);
+  }
+}
+
+const browserHeaders = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+  Accept: 'application/json,text/plain,*/*',
+  'Accept-Language': 'zh-CN,zh;q=0.9'
+};
+
+async function fetchSinaPage(
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal
+): Promise<any[]> {
+  const params = new URLSearchParams({
+    page: String(page),
+    num: String(pageSize),
+    sort: 'symbol',
+    asc: '1',
+    node: 'hs_a',
+    symbol: '',
+    _s_r_a: 'page'
+  });
+  const url =
+    'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?' +
+    params.toString();
+
+  const json = await fetchJson(
+    url,
+    {
+      headers: {
+        ...browserHeaders,
+        Referer: 'https://vip.stock.finance.sina.com.cn/mkt/'
+      }
+    },
+    signal,
+    15_000
+  );
+
+  if (!Array.isArray(json)) {
+    throw new Error('新浪全市场返回格式异常');
+  }
+  return json;
+}
+
+export async function fetchSinaSnapshot(
+  signal?: AbortSignal,
+  testOnly = false
+): Promise<MarketStock[]> {
+  const pageSize = testOnly ? 10 : 100;
+  const allRows: any[] = [];
+
+  for (let page = 1; page <= (testOnly ? 1 : 80); page += 1) {
+    throwIfAborted(signal);
+    const rows = await fetchSinaPage(page, pageSize, signal);
+    if (rows.length === 0) break;
+    allRows.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+
+  return allRows
+    .map((row) => {
+      const code = String(row.code || row.symbol || '').replace(/^(sh|sz|bj)/i, '');
+      return {
+        code,
+        name: String(row.name || ''),
+        market: marketByCode(code),
+        price: number(row.trade),
+        pct: number(row.changepercent),
+        change: number(row.pricechange),
+        volume: number(row.volume),
+        amount: number(row.amount),
+        amplitude: number(row.amplitude),
+        turnover: number(row.turnoverratio),
+        pe: nullable(row.per),
+        volumeRatio: nullable(row.volume_ratio),
+        high: number(row.high),
+        low: number(row.low),
+        open: number(row.open),
+        preClose: number(row.settlement),
+        totalMarketCap: number(row.mktcap) * 10_000,
+        floatMarketCap: number(row.nmc) * 10_000,
+        pb: nullable(row.pb)
+      } satisfies MarketStock;
+    })
+    .filter((row) => /^\d{6}$/.test(row.code) && row.name);
+}
+
+async function fetchEastmoneyDataCenterPage(
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal
+): Promise<{ rows: any[]; total: number }> {
+  const params = new URLSearchParams({
+    st: 'SECURITY_CODE',
+    sr: '1',
+    ps: String(pageSize),
+    p: String(page),
+    sty:
+      'SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,NEW_PRICE,CHANGE_RATE,VOLUME_RATIO,DEAL_AMOUNT,TURNOVERRATE,PE9,PBNEWMRQ,TOTAL_MARKET_CAP,CIRCULATION_MARKET_CAP',
+    filter:
+      '(MARKET+in+("上交所主板","深交所主板","深交所创业板","上交所科创板","北交所"))',
+    source: 'SELECT_SECURITIES',
+    client: 'WEB'
+  });
+
+  const json = await fetchJson(
+    'https://data.eastmoney.com/dataapi/xuangu/list?' + params.toString(),
+    {
+      headers: {
+        ...browserHeaders,
+        Referer: 'https://data.eastmoney.com/xuangu/'
+      }
+    },
+    signal,
+    30_000
+  );
+
+  if (!json?.success) {
+    throw new Error(`东财数据中心业务错误：${json?.message || 'unknown'}`);
+  }
+
+  return {
+    rows: Array.isArray(json?.result?.data) ? json.result.data : [],
+    total: number(json?.result?.count)
+  };
+}
+
+export async function fetchEastmoneyDataCenterSnapshot(
+  signal?: AbortSignal,
+  testOnly = false
+): Promise<MarketStock[]> {
+  const pageSize = testOnly ? 10 : 500;
+  const allRows: any[] = [];
+
+  for (let page = 1; page <= (testOnly ? 1 : 20); page += 1) {
+    throwIfAborted(signal);
+    const { rows, total } = await fetchEastmoneyDataCenterPage(
+      page,
+      pageSize,
+      signal
+    );
+    allRows.push(...rows);
+    if (rows.length === 0 || allRows.length >= total || rows.length < pageSize) {
+      break;
+    }
+  }
+
+  return allRows
+    .map((row) => {
+      const code = String(row.SECURITY_CODE || '');
+      return {
+        code,
+        name: String(row.SECURITY_NAME_ABBR || ''),
+        market: marketByCode(code),
+        price: number(row.NEW_PRICE),
+        pct: number(row.CHANGE_RATE),
+        change: 0,
+        volume: 0,
+        amount: number(row.DEAL_AMOUNT),
+        amplitude: 0,
+        turnover: number(row.TURNOVERRATE),
+        pe: nullable(row.PE9),
+        volumeRatio: nullable(row.VOLUME_RATIO),
+        high: 0,
+        low: 0,
+        open: 0,
+        preClose: 0,
+        totalMarketCap: number(row.TOTAL_MARKET_CAP),
+        floatMarketCap: number(row.CIRCULATION_MARKET_CAP),
+        pb: nullable(row.PBNEWMRQ)
+      } satisfies MarketStock;
+    })
+    .filter((row) => /^\d{6}$/.test(row.code) && row.name);
+}
+
+const eastmoneyLiveBases = [
+  'https://push2delay.eastmoney.com',
+  'https://push2.eastmoney.com'
+];
+
+async function eastmoneyJson(
+  path: string,
+  params: URLSearchParams,
+  signal?: AbortSignal,
+  historical = false
+): Promise<any> {
+  const bases = historical
+    ? ['https://push2his.eastmoney.com']
+    : eastmoneyLiveBases;
+  let lastError: unknown;
+
+  for (const base of bases) {
+    try {
+      return await fetchJson(
+        `${base}${path}?${params.toString()}`,
+        {
+          headers: {
+            ...browserHeaders,
+            Referer: 'https://quote.eastmoney.com/',
+            Connection: 'close'
+          }
+        },
+        signal
+      );
+    } catch (error) {
+      lastError = error;
+      throwIfAborted(signal);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError));
+}
+
+export async function fetchEastmoneyPush2Snapshot(
+  signal?: AbortSignal,
+  testOnly = false
+): Promise<MarketStock[]> {
+  const pageSize = testOnly ? 10 : 100;
+  const result: MarketStock[] = [];
+
+  for (let page = 1; page <= (testOnly ? 1 : 100); page += 1) {
+    throwIfAborted(signal);
+
+    const params = new URLSearchParams({
+      pn: String(page),
+      pz: String(pageSize),
+      po: '1',
+      np: '1',
+      fltt: '2',
+      invt: '2',
+      fid: 'f3',
+      fs:
+        'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048',
+      fields:
+        'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23',
+      _: String(Date.now())
+    });
+
+    const json = await eastmoneyJson(
+      '/api/qt/clist/get',
+      params,
+      signal
+    );
+    const rows = json?.data?.diff;
+    if (!Array.isArray(rows) || rows.length === 0) break;
+
+    for (const row of rows) {
+      result.push({
+        code: String(row.f12 || ''),
+        name: String(row.f14 || ''),
+        market: number(row.f13),
+        price: number(row.f2),
+        pct: number(row.f3),
+        change: number(row.f4),
+        volume: number(row.f5),
+        amount: number(row.f6),
+        amplitude: number(row.f7),
+        turnover: number(row.f8),
+        pe: nullable(row.f9),
+        volumeRatio: nullable(row.f10),
+        high: number(row.f15),
+        low: number(row.f16),
+        open: number(row.f17),
+        preClose: number(row.f18),
+        totalMarketCap: number(row.f20),
+        floatMarketCap: number(row.f21),
+        pb: nullable(row.f23)
+      });
+    }
+
+    const total = number(json?.data?.total);
+    if (testOnly || (total > 0 && result.length >= total) || rows.length < pageSize) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function tencentSymbol(code: string): string {
+  if (/^(4|8|92)/.test(code)) return `bj${code}`;
+  if (/^(5|6|9)/.test(code)) return `sh${code}`;
+  return `sz${code}`;
+}
+
+export async function fetchTencentDaily(
+  code: string,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  const symbol = tencentSymbol(code);
+  const params = new URLSearchParams({
+    param: `${symbol},day,,,${Math.min(Math.max(limit, 1), 1000)},qfq`
+  });
+
+  const endpoints = [
+    'https://ifzq.gtimg.cn/appstock/app/newfqkline/get',
+    'https://web.ifzq.gtimg.cn/appstock/app/newfqkline/get',
+    'https://ifzq.gtimg.cn/appstock/app/fqkline/get'
+  ];
+
+  let lastError: unknown;
+  for (const endpoint of endpoints) {
+    try {
+      const json = await fetchJson(
+        endpoint + '?' + params.toString(),
+        {
+          headers: {
+            ...browserHeaders,
+            Referer: 'https://gu.qq.com/'
+          }
+        },
+        signal
+      );
+      const stock = json?.data?.[symbol] || {};
+      const raw = stock.qfqday || stock.day || [];
+      if (!Array.isArray(raw) || raw.length === 0) {
+        throw new Error('腾讯日K返回为空');
+      }
+
+      let previousClose: number | null = null;
+      return raw.map((item: any[]) => {
+        const close = number(item[2]);
+        const change =
+          previousClose && previousClose > 0
+            ? close - previousClose
+            : null;
+        const pct =
+          previousClose && previousClose > 0
+            ? (change! / previousClose) * 100
+            : null;
+        const amplitude =
+          previousClose && previousClose > 0
+            ? ((number(item[3]) - number(item[4])) / previousClose) * 100
+            : null;
+        const row: DailyBar = {
+          date: String(item[0]),
+          open: number(item[1]),
+          close,
+          high: number(item[3]),
+          low: number(item[4]),
+          volume: number(item[5]),
+          amount: null,
+          amplitude,
+          pct,
+          change,
+          turnover: null
+        };
+        previousClose = close;
+        return row;
+      });
+    } catch (error) {
+      lastError = error;
+      throwIfAborted(signal);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError));
+}
+
+export async function fetchEastmoneyDaily(
+  code: string,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  const secid = `${marketByCode(code)}.${code}`;
+  const params = new URLSearchParams({
+    secid,
+    klt: '101',
+    fqt: '1',
+    lmt: String(limit),
+    end: '20500101',
+    fields1: 'f1,f2,f3,f4,f5,f6',
+    fields2:
+      'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
+    _: String(Date.now())
+  });
+
+  const json = await eastmoneyJson(
+    '/api/qt/stock/kline/get',
+    params,
+    signal,
+    true
+  );
+  const rows = json?.data?.klines;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('东财历史日K返回为空');
+  }
+
+  return rows.map((line: string) => {
+    const row = String(line).split(',');
+    return {
+      date: row[0],
+      open: number(row[1]),
+      close: number(row[2]),
+      high: number(row[3]),
+      low: number(row[4]),
+      volume: number(row[5]),
+      amount: nullable(row[6]),
+      amplitude: nullable(row[7]),
+      pct: nullable(row[8]),
+      change: nullable(row[9]),
+      turnover: nullable(row[10])
+    };
+  });
+}
+
+interface TushareResponse {
+  code: number;
+  msg: string;
+  data?: {
+    fields: string[];
+    items: unknown[][];
+  };
+}
+
+async function tushareCall(
+  apiName: string,
+  params: Record<string, unknown>,
+  fields: string[],
+  signal?: AbortSignal
+): Promise<Record<string, unknown>[]> {
+  const token = String(process.env.TUSHARE_TOKEN || '').trim();
+  if (!token) {
+    throw new Error('未配置 TUSHARE_TOKEN');
+  }
+
+  const json = (await fetchJson(
+    'https://api.tushare.pro',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': browserHeaders['User-Agent']
+      },
+      body: JSON.stringify({
+        api_name: apiName,
+        token,
+        params,
+        fields: fields.join(',')
+      })
+    },
+    signal,
+    30_000
+  )) as TushareResponse;
+
+  if (json.code !== 0) {
+    throw new Error(`Tushare错误：${json.msg || json.code}`);
+  }
+
+  const responseFields = json.data?.fields || [];
+  const items = json.data?.items || [];
+
+  return items.map((values) =>
+    Object.fromEntries(
+      responseFields.map((field, index) => [field, values[index]])
+    )
+  );
+}
+
+async function tushareTradeDate(signal?: AbortSignal): Promise<string> {
+  const end = new Date();
+  const start = new Date(end.getTime() - 30 * 86400_000);
+  const fmt = (date: Date) =>
+    date.toISOString().slice(0, 10).replaceAll('-', '');
+
+  const rows = await tushareCall(
+    'trade_cal',
+    {
+      exchange: '',
+      start_date: fmt(start),
+      end_date: fmt(end),
+      is_open: '1'
+    },
+    ['cal_date', 'is_open'],
+    signal
+  );
+
+  const dates = rows
+    .map((row) => String(row.cal_date || ''))
+    .filter(Boolean)
+    .sort();
+
+  const last = dates.at(-1);
+  if (!last) throw new Error('Tushare没有返回最近交易日');
+  return last;
+}
+
+export async function fetchTushareSnapshot(
+  signal?: AbortSignal,
+  testOnly = false
+): Promise<MarketStock[]> {
+  const tradeDate = await tushareTradeDate(signal);
+
+  const [daily, basics, stocks] = await Promise.all([
+    tushareCall(
+      'daily',
+      { trade_date: tradeDate },
+      [
+        'ts_code',
+        'open',
+        'high',
+        'low',
+        'close',
+        'pre_close',
+        'change',
+        'pct_chg',
+        'vol',
+        'amount'
+      ],
+      signal
+    ),
+    tushareCall(
+      'daily_basic',
+      { trade_date: tradeDate },
+      [
+        'ts_code',
+        'turnover_rate',
+        'volume_ratio',
+        'pe',
+        'pb',
+        'total_mv',
+        'circ_mv'
+      ],
+      signal
+    ),
+    tushareCall(
+      'stock_basic',
+      { exchange: '', list_status: 'L' },
+      ['ts_code', 'symbol', 'name', 'exchange'],
+      signal
+    )
+  ]);
+
+  const basicMap = new Map(
+    basics.map((row) => [String(row.ts_code), row])
+  );
+  const stockMap = new Map(
+    stocks.map((row) => [String(row.ts_code), row])
+  );
+
+  const rows = daily.map((row) => {
+    const tsCode = String(row.ts_code || '');
+    const stock = stockMap.get(tsCode) || {};
+    const basic = basicMap.get(tsCode) || {};
+    const code =
+      String(stock.symbol || '') ||
+      tsCode.split('.')[0] ||
+      '';
+
+    return {
+      code,
+      name: String(stock.name || code),
+      market: marketByCode(code),
+      price: number(row.close),
+      pct: number(row.pct_chg),
+      change: number(row.change),
+      volume: number(row.vol),
+      amount: number(row.amount) * 1_000,
+      amplitude:
+        number(row.pre_close) > 0
+          ? ((number(row.high) - number(row.low)) /
+              number(row.pre_close)) *
+            100
+          : 0,
+      turnover: number(basic.turnover_rate),
+      pe: nullable(basic.pe),
+      volumeRatio: nullable(basic.volume_ratio),
+      high: number(row.high),
+      low: number(row.low),
+      open: number(row.open),
+      preClose: number(row.pre_close),
+      totalMarketCap: number(basic.total_mv) * 10_000,
+      floatMarketCap: number(basic.circ_mv) * 10_000,
+      pb: nullable(basic.pb)
+    } satisfies MarketStock;
+  });
+
+  return (testOnly ? rows.slice(0, 10) : rows).filter(
+    (row) => /^\d{6}$/.test(row.code)
+  );
+}
+
+export async function fetchTushareDaily(
+  code: string,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  const exchange = /^(5|6|9)/.test(code) ? 'SH' : /^(4|8|92)/.test(code) ? 'BJ' : 'SZ';
+  const rows = await tushareCall(
+    'daily',
+    { ts_code: `${code}.${exchange}` },
+    [
+      'trade_date',
+      'open',
+      'high',
+      'low',
+      'close',
+      'pre_close',
+      'change',
+      'pct_chg',
+      'vol',
+      'amount'
+    ],
+    signal
+  );
+
+  return rows
+    .slice(0, limit)
+    .reverse()
+    .map((row) => {
+      const date = String(row.trade_date || '');
+      return {
+        date:
+          date.length === 8
+            ? `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`
+            : date,
+        open: number(row.open),
+        close: number(row.close),
+        high: number(row.high),
+        low: number(row.low),
+        preClose: nullable(row.pre_close),
+        volume: number(row.vol),
+        amount: number(row.amount) * 1_000,
+        amplitude:
+          number(row.pre_close) > 0
+            ? ((number(row.high) - number(row.low)) /
+                number(row.pre_close)) *
+              100
+            : null,
+        pct: nullable(row.pct_chg),
+        change: nullable(row.change),
+        turnover: null
+      };
+    });
+}
+
+export async function fetchEastmoneySectors(
+  type: SectorType,
+  signal?: AbortSignal
+): Promise<SectorRow[]> {
+  const result: SectorRow[] = [];
+
+  for (let page = 1; page <= 20; page += 1) {
+    throwIfAborted(signal);
+    const params = new URLSearchParams({
+      pn: String(page),
+      pz: '100',
+      po: '1',
+      np: '1',
+      fltt: '2',
+      invt: '2',
+      fid: 'f3',
+      fs:
+        type === 'industry'
+          ? 'm:90+t:2+f:!50'
+          : 'm:90+t:3+f:!50',
+      fields: 'f2,f3,f12,f14,f62,f104,f105,f128',
+      _: String(Date.now())
+    });
+
+    const json = await eastmoneyJson(
+      '/api/qt/clist/get',
+      params,
+      signal
+    );
+    const rows = json?.data?.diff;
+    if (!Array.isArray(rows) || rows.length === 0) break;
+
+    result.push(
+      ...rows.map((row: any) => ({
+        type,
+        code: String(row.f12 || ''),
+        name: String(row.f14 || ''),
+        price: number(row.f2),
+        pct: number(row.f3),
+        mainInflow: number(row.f62),
+        upCount: number(row.f104),
+        downCount: number(row.f105),
+        leadStock: String(row.f128 || '')
+      }))
+    );
+
+    const total = number(json?.data?.total);
+    if ((total > 0 && result.length >= total) || rows.length < 100) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+export async function testDataSource(
+  source: DataSourceId,
+  signal?: AbortSignal
+): Promise<{ capability: DataCapability; count: number; sample: unknown }> {
+  switch (source) {
+    case 'sina': {
+      const rows = await fetchSinaSnapshot(signal, true);
+      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+    }
+    case 'eastmoney_datacenter': {
+      const rows = await fetchEastmoneyDataCenterSnapshot(signal, true);
+      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+    }
+    case 'eastmoney_push2': {
+      const rows = await fetchEastmoneyPush2Snapshot(signal, true);
+      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+    }
+    case 'tencent': {
+      const rows = await fetchTencentDaily('600000', 5, signal);
+      return { capability: 'daily', count: rows.length, sample: rows.at(-1) || null };
+    }
+    case 'tushare': {
+      const rows = await fetchTushareSnapshot(signal, true);
+      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+    }
+  }
+}
+
+export async function fetchSnapshotBySource(
+  source: DataSourceId,
+  signal?: AbortSignal
+): Promise<MarketStock[]> {
+  switch (source) {
+    case 'sina':
+      return fetchSinaSnapshot(signal);
+    case 'eastmoney_datacenter':
+      return fetchEastmoneyDataCenterSnapshot(signal);
+    case 'eastmoney_push2':
+      return fetchEastmoneyPush2Snapshot(signal);
+    case 'tushare':
+      return fetchTushareSnapshot(signal);
+    default:
+      throw new Error(`${source} 不支持全市场快照`);
+  }
+}
+
+export async function fetchDailyBySource(
+  source: DataSourceId,
+  code: string,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  switch (source) {
+    case 'tencent':
+      return fetchTencentDaily(code, limit, signal);
+    case 'eastmoney_push2':
+      return fetchEastmoneyDaily(code, limit, signal);
+    case 'tushare':
+      return fetchTushareDaily(code, limit, signal);
+    default:
+      throw new Error(`${source} 不支持历史日K`);
+  }
+}
+
+export async function fetchSectorsBySource(
+  source: DataSourceId,
+  type: SectorType,
+  signal?: AbortSignal
+): Promise<SectorRow[]> {
+  if (source !== 'eastmoney_push2') {
+    throw new Error(`${source} 暂不支持板块同步`);
+  }
+  return fetchEastmoneySectors(type, signal);
+}
