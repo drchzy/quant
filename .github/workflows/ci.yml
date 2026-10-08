@@ -81,7 +81,7 @@ jobs:
           exit 1
 
       - name: 检查 Docker Compose
-        run: docker compose config
+        run: docker compose --env-file runtime/config/.env.example config
 
       - name: 构建 market-data 镜像
         run: docker build -f services/market-data/Dockerfile -t quant-market-data:test .
@@ -94,6 +94,17 @@ jobs:
 
       - name: 构建 Web 镜像
         run: docker build -f apps/web/Dockerfile -t quant-web:test .
+
+      - name: 检查 Web 默认登录脚本
+        shell: bash
+        run: |
+          docker run --rm \
+            -e WEB_AUTH_ENABLED=true \
+            -e WEB_USERNAME=admin \
+            -e WEB_PASSWORD=quant123456 \
+            --entrypoint sh \
+            quant-web:test \
+            -c '/docker-entrypoint.d/40-basic-auth.sh && test -s /etc/nginx/.htpasswd && grep -q admin /etc/nginx/.htpasswd'
 
       - name: 停止测试服务
         if: always()
