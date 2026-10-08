@@ -7,6 +7,8 @@ import {
 } from './market-data.js';
 import { selectStocks } from './strategy.js';
 import type { SelectResult } from './types.js';
+import { getReviewSummary } from './review.js';
+import { getLatestBacktest } from './backtest.js';
 
 export async function runSelect() {
   const id = randomUUID();
@@ -201,9 +203,11 @@ export async function getRun(id: string) {
  * 一次返回当日市场背景、主候选3只和完整候选列表。
  */
 export async function getAiSelect() {
-  const [latest, market] = await Promise.all([
+  const [latest, market, review, backtest] = await Promise.all([
     getLatest(config.topCount),
-    getMarketOverview()
+    getMarketOverview(),
+    getReviewSummary(true),
+    getLatestBacktest()
   ]);
 
   return {
@@ -218,6 +222,8 @@ export async function getAiSelect() {
       timeStopDays: config.timeStopDays
     },
     market,
+    review,
+    backtest,
     run: latest.run,
     main: latest.data.filter((item) => item.isMain),
     candidates: latest.data
