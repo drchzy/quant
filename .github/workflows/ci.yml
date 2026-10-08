@@ -57,6 +57,9 @@ jobs:
       - name: 编译全部模块和页面
         run: npm run build
 
+      - name: 测试行情 Provider 解析与能力
+        run: node --test services/market-data/test/*.test.mjs
+
       - name: 检查单容器 Compose
         run: |
           docker compose config

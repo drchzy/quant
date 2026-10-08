@@ -3,87 +3,127 @@ import { config } from './config.js';
 import { calculateIndicators } from './indicator.js';
 import {
   buildSecid,
-  getBatchQuotes,
-  getDailyKline,
-  getIntradayTrend,
   getMarketDataSourceStatus,
-  getMarketStocks,
-  getMinuteKline,
-  getQuote,
-  getSectors,
   mainIndexes
 } from './eastmoney.js';
 import type { MarketStock, SectorType } from './types.js';
-import { getSourceSettings } from './source-manager.js';
+import { getEnabledSources, getSourceSettings } from './source-manager.js';
+import {
+  fetchSnapshotBySource,
+  fetchIndexesBySource,
+  fetchStockQuoteBySource,
+  fetchEastmoneyIntraday,
+  type IndexQuote,
+  fetchSectorsBySource,
+  fetchDailyBySource,
+  fetchMinuteBySource,
+  type DataCapability,
+  type DataSourceId
+} from './providers.js';
+
+async function isPush2Enabled(): Promise<boolean> {
+  const settings = await getSourceSettings();
+  return settings.some((s) => s.id === 'eastmoney_push2' && s.enabled && s.available);
+}
+
+async function fromEnabledSources<T>(
+  capability: DataCapability,
+  fetcher: (source: DataSourceId) => Promise<T>,
+  valid: (value: T) => boolean = () => true
+): Promise<{ source: DataSourceId; data: T }> {
+  const sources = await getEnabledSources(capability);
+  const failures: string[] = [];
+  for (const source of sources) {
+    try {
+      const data = await fetcher(source);
+      if (!valid(data)) throw new Error('返回数据为空');
+      return { source, data };
+    } catch (error) {
+      failures.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`${capability} 已启用数据源均不可用：${failures.join('; ')}`);
+}
+
 
 let marketCache:
-  | { time: number; data: MarketStock[] }
+  | { time: number; key: string; data: MarketStock[] }
   | null = null;
 let marketInflight: Promise<MarketStock[]> | null = null;
+let marketInflightKey = '';
 
 const sectorCache = new Map<
   SectorType,
-  { time: number; data: Awaited<ReturnType<typeof getSectors>> }
+  { time: number; key: string; data: Awaited<ReturnType<typeof fetchSectorsBySource>> }
 >();
 const sectorInflight = new Map<
   SectorType,
-  Promise<Awaited<ReturnType<typeof getSectors>>>
+  { key: string; task: Promise<Awaited<ReturnType<typeof fetchSectorsBySource>>> }
 >();
 
 async function getLiveMarket(): Promise<MarketStock[]> {
+  const sources = await getEnabledSources('snapshot');
+  const key = sources.join('|');
   const now = Date.now();
 
   if (
-    marketCache &&
+    marketCache && marketCache.key === key &&
     now - marketCache.time < config.marketCacheTtlMs
   ) {
     return marketCache.data;
   }
 
-  if (marketInflight) return marketInflight;
+  if (marketInflight && marketInflightKey === key) return marketInflight;
 
-  marketInflight = getMarketStocks()
+  marketInflightKey = key;
+  marketInflight = fromEnabledSources('snapshot', (source) => fetchSnapshotBySource(source), (rows) => rows.length > 0)
+    .then((result) => result.data)
     .then((data) => {
       marketCache = {
         time: Date.now(),
+        key,
         data
       };
       return data;
     })
     .finally(() => {
-      marketInflight = null;
+      if (marketInflightKey === key) marketInflight = null;
     });
 
   return marketInflight;
 }
 
 async function getLiveSectors(type: SectorType) {
+  const sources = await getEnabledSources('sector');
+  const key = sources.join('|');
   const now = Date.now();
   const cached = sectorCache.get(type);
 
   if (
-    cached &&
+    cached && cached.key === key &&
     now - cached.time < config.sectorCacheTtlMs
   ) {
     return cached.data;
   }
 
   const running = sectorInflight.get(type);
-  if (running) return running;
+  if (running?.key === key) return running.task;
 
-  const task = getSectors(type)
+  const task = fromEnabledSources('sector', (source) => fetchSectorsBySource(source, type), (rows) => rows.length > 0)
+    .then((result) => result.data)
     .then((data) => {
       sectorCache.set(type, {
         time: Date.now(),
+        key,
         data
       });
       return data;
     })
     .finally(() => {
-      sectorInflight.delete(type);
+      if (sectorInflight.get(type)?.key === key) sectorInflight.delete(type);
     });
 
-  sectorInflight.set(type, task);
+  sectorInflight.set(type, { key, task });
   return task;
 }
 
@@ -108,7 +148,7 @@ function buildBreadth(rows: MarketStock[]) {
 
 /**
  * 市场总览同时给页面和 AI 使用。
- * live=true 时直接获取当前东财数据，避免依赖数据库里上一次同步结果。
+ * live=true 按数据源能力与优先级访问，失败后回退本地 DuckDB。
  */
 async function getStoredMarketRows(): Promise<MarketStock[]> {
   return all<MarketStock>(`
@@ -138,6 +178,69 @@ async function getStoredMarketRows(): Promise<MarketStock[]> {
       SELECT MAX(trade_date) FROM daily_price
     )
   `);
+}
+
+/** 按启用与优先级逐级补齐指数；每个指数成功后不再请求后续源。 */
+async function getLiveIndexes(signal?: AbortSignal) {
+  const enabled = await getEnabledSources('index');
+  const quotes = new Map<string, IndexQuote>();
+  const origins = new Map<string, DataSourceId>();
+  const errors: string[] = [];
+  for (const source of enabled) {
+    if (signal?.aborted) throw new DOMException('同步任务已取消', 'AbortError');
+    const pending = mainIndexes.filter((item) => !quotes.has(item.code));
+    if (pending.length === 0) break;
+    try {
+      const result = await fetchIndexesBySource(source, pending, signal);
+      for (const item of pending) {
+        const quote = result.get(item.code);
+        if (quote && quote.price > 0 && Number.isFinite(quote.pct)) {
+          quotes.set(item.code, quote);
+          origins.set(item.code, source);
+        }
+      }
+      if (result.size === 0) errors.push(source + ': 指数数据为空');
+    } catch (error) {
+      errors.push(source + ': ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  if (quotes.size === 0) {
+    throw new Error('指数数据源全部不可用：' + errors.join('; '));
+  }
+  for (const item of mainIndexes) {
+    if (signal?.aborted) throw new DOMException('同步任务已取消', 'AbortError');
+    const quote = quotes.get(item.code);
+    if (!quote) continue;
+    await run(
+      `INSERT INTO market_index (
+        code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+      ON CONFLICT (code) DO UPDATE SET
+        price = excluded.price, open = excluded.open,
+        high = excluded.high, low = excluded.low,
+        pre_close = excluded.pre_close, pct = excluded.pct,
+        change = excluded.change, volume = excluded.volume,
+        amount = excluded.amount, updated_at = now()`,
+      [
+        item.code, item.name, quote.price, quote.open ?? null,
+        quote.high ?? null, quote.low ?? null, quote.preClose ?? null,
+        quote.pct, quote.change, quote.volume ?? null, quote.amount ?? null
+      ]
+    );
+  }
+  const stored = await getStoredIndexes();
+  return {
+    indexes: stored.map((item) => ({
+      ...item,
+      quote: item.quote ? { ...item.quote, source: origins.get(item.code) || 'duckdb' } : null
+    })),
+    missing: mainIndexes.filter((item) => !quotes.has(item.code)).map((item) => item.name),
+    errors
+  };
+}
+
+export async function syncMarketIndexes(signal?: AbortSignal): Promise<void> {
+  await getLiveIndexes(signal);
 }
 
 async function getStoredIndexes() {
@@ -188,16 +291,16 @@ export async function getMarketOverview(live = true) {
     }
 
     try {
-      const quotes = await getBatchQuotes(
-        mainIndexes.map((item) => item.secid)
-      );
-      indexes = mainIndexes.map((item) => ({
-        ...item,
-        quote: quotes.get(item.code) || null
-      }));
+      const result = await getLiveIndexes();
+      indexes = result.indexes;
+      if (result.missing.length > 0) {
+        degraded = true;
+        warnings.push('部分指数未取得实时行情，已优先显示本地数据：' + result.missing.join('、'));
+      }
     } catch (error) {
       degraded = true;
-      warnings.push('指数实时行情不可用，已回退本地数据');
+      warnings.push('指数实时行情不可用，已回退本地数据：' +
+        (error instanceof Error ? error.message : String(error)));
       indexes = await getStoredIndexes();
     }
 
@@ -211,7 +314,7 @@ export async function getMarketOverview(live = true) {
       industry = industryResult.value;
     } else {
       degraded = true;
-      warnings.push('行业板块实时行情不可用，已回退本地数据');
+      warnings.push('行业板块：启用的数据源无板块能力或请求失败，显示本地已同步记录');
       industry = await getStoredSectors('industry');
     }
 
@@ -219,7 +322,7 @@ export async function getMarketOverview(live = true) {
       concept = conceptResult.value;
     } else {
       degraded = true;
-      warnings.push('概念板块实时行情不可用，已回退本地数据');
+      warnings.push('概念板块：启用的数据源无板块能力或请求失败，显示本地已同步记录');
       concept = await getStoredSectors('concept');
     }
   } else {
@@ -385,7 +488,7 @@ export async function getDaily(
   refresh = false
 ) {
   if (refresh) {
-    const result = await getDailyKline(code, days, 1);
+    const result = await fromEnabledSources('daily', (source) => fetchDailyBySource(source, code, days), (rows) => rows.length > 0);
 
     for (const item of result.data) {
       await run(
@@ -438,11 +541,7 @@ export async function getMinute(
   refresh = true
 ) {
   if (refresh) {
-    const result = await getMinuteKline(
-      code,
-      period as 1 | 5 | 15 | 30 | 60,
-      limit
-    );
+    const result = await fromEnabledSources('minute', (source) => fetchMinuteBySource(source, code, period as 1 | 5 | 15 | 30 | 60, limit), (rows) => rows.length > 0);
 
     for (const item of result.data) {
       await run(
@@ -774,8 +873,7 @@ export async function getSectorList(
   live = true
 ) {
   if (live) {
-    const sources = await getSourceSettings();
-    if (sources.some((item) => item.id === 'eastmoney_push2' && item.enabled)) {
+    if (await isPush2Enabled()) {
       try {
         return await getLiveSectors(type);
       } catch {
@@ -797,10 +895,15 @@ export async function getSectorList(
  */
 export async function getStockQuote(code: string) {
   try {
+    const result = await fromEnabledSources(
+      'quote',
+      (source) => fetchStockQuoteBySource(source, code),
+      (quote) => quote.price > 0
+    );
     return {
-      source: 'eastmoney',
+      source: result.source,
       degraded: false,
-      data: await getQuote(buildSecid(code))
+      data: result.data
     };
   } catch (error) {
     const stock = await getStock(code);
@@ -834,22 +937,24 @@ export async function getStockQuote(code: string) {
   }
 }
 
-export async function getStockIntraday(code: string) {
-  try {
-    const data = await getIntradayTrend(buildSecid(code));
-
-    if (data.length > 0) {
-      return {
-        source: 'eastmoney',
-        degraded: false,
-        data
-      };
+export async function getStockIntraday(code: string, fallbackMinute?: any[]) {
+  // AI 接口传入已经按优先级获取的分钟K，不能再额外访问东财。
+  if (!fallbackMinute) {
+    const minuteSources = await getEnabledSources('minute').catch(() => [] as DataSourceId[]);
+    // 仅当 Push2 本身排在分钟能力优先级第一时才尝试专用分时。
+    if (minuteSources[0] === 'eastmoney_push2' && await isPush2Enabled()) {
+      try {
+        const data = await fetchEastmoneyIntraday(code);
+        if (data.length > 0) {
+          return { source: 'eastmoney_push2', degraded: false, data };
+        }
+      } catch {
+        // 专用分时不可用后，依照分钟K配置继续降级。
+      }
     }
-  } catch {
-    // 继续走分钟K备用源。
   }
 
-  const minute = await getMinute(code, 1, 240, true);
+  const minute = fallbackMinute ?? await getMinute(code, 1, 240, true);
 
   return {
     source: 'minute-kline-fallback',
@@ -867,14 +972,14 @@ export async function getStockIntraday(code: string) {
 }
 
 export async function getAiStock(code: string) {
-  const [stock, quoteResult, daily, minute, intradayResult] =
+  const [stock, quoteResult, daily, minute] =
     await Promise.all([
       getStock(code),
       getStockQuote(code),
       getDaily(code, 120, false),
-      getMinute(code, 1, 240, true),
-      getStockIntraday(code)
+      getMinute(code, 1, 240, true)
     ]);
+  const intradayResult = await getStockIntraday(code, minute);
 
   return {
     code,

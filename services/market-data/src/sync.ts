@@ -11,11 +11,7 @@ import {
   getEnabledSources,
   recordSourceResult
 } from './source-manager.js';
-import {
-  getLatestTradeDate,
-  getQuote,
-  mainIndexes
-} from './eastmoney.js';
+import { syncMarketIndexes } from './market.js';
 import type { SectorType } from './types.js';
 
 type JobStatus =
@@ -425,7 +421,23 @@ export async function syncDailyMarket(
 
       let tradeDate: string;
       try {
-        tradeDate = await getLatestTradeDate();
+        // 使用启用的日K数据源判断交易日，禁止暗中访问东财。
+        const dailySources = await getEnabledSources('daily');
+        let resolvedDate: string | null = null;
+        for (const source of dailySources) {
+          try {
+            const bars = await fetchDailyBySource(source, '600000', 5, controller.signal);
+            const date = bars.at(-1)?.date?.slice(0, 10);
+            if (date) {
+              resolvedDate = date;
+              break;
+            }
+          } catch (error) {
+            if (controller.signal.aborted) throw error;
+          }
+        }
+        if (!resolvedDate) throw new Error('已启用的数据源无法确定交易日');
+        tradeDate = resolvedDate;
       } catch {
         // 快照源已经成功时，即使交易日日历接口临时失败，也允许按上海时区当天落库。
         tradeDate = new Intl.DateTimeFormat('en-CA', {
@@ -846,47 +858,14 @@ export async function syncHistory(
   return jobId;
 }
 
-export async function syncIndexes(
-  signal?: AbortSignal
-): Promise<void> {
-  for (const item of mainIndexes) {
-    if (signal) ensureNotAborted(signal);
-
-    try {
-      const quote = await getQuote(item.secid);
-      if (!quote) continue;
-
-      await run(
-        `INSERT OR REPLACE INTO market_index
-          (code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
-        [
-          item.code,
-          item.name,
-          quote.price,
-          quote.open,
-          quote.high,
-          quote.low,
-          quote.preClose,
-          quote.pct,
-          quote.change,
-          quote.volume,
-          quote.amount
-        ]
-      );
-    } catch (error) {
-      if (signal?.aborted) {
-        throw new DOMException(
-          '同步任务已取消',
-          'AbortError'
-        );
-      }
-
-      console.warn(
-        `同步指数 ${item.code} 失败，保留旧数据`,
-        error
-      );
-    }
+export async function syncIndexes(signal?: AbortSignal): Promise<void> {
+  try {
+    await syncMarketIndexes(signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // 指数是补充数据，不能因某数据源受限令已完成的全市场同步失败。
+    console.warn('指数同步暂不可用，保留 DuckDB 中的旧指数记录：',
+      error instanceof Error ? error.message : String(error));
   }
 }
 
