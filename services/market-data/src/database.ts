@@ -125,6 +125,22 @@ export async function initDatabase(): Promise<void> {
     )
   `);
 
+  // 外部分时独立存储，不覆盖原有分钟 K 数据。
+  await run(`
+    CREATE TABLE IF NOT EXISTS intraday_trend (
+      code VARCHAR NOT NULL,
+      trade_time TIMESTAMP NOT NULL,
+      price DOUBLE NOT NULL,
+      avg_price DOUBLE,
+      volume DOUBLE,
+      amount DOUBLE,
+      pct DOUBLE,
+      source VARCHAR NOT NULL,
+      updated_at TIMESTAMP NOT NULL,
+      PRIMARY KEY (code, trade_time)
+    )
+  `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS sync_job (
       id VARCHAR PRIMARY KEY,
