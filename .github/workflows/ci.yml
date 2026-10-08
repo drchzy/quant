@@ -51,6 +51,8 @@ jobs:
           for i in {1..20}; do
             if curl -fsS http://127.0.0.1:8090/health; then
               curl -fsS http://127.0.0.1:8090/api/v1/select/config
+              curl -fsS "http://127.0.0.1:8090/api/v1/select/review/summary?mainOnly=true"
+              curl -fsS http://127.0.0.1:8090/api/v1/select/backtests/latest
               exit 0
             fi
             sleep 1
