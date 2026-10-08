@@ -5,7 +5,6 @@ import {
   buildSecid,
   getIntradayTrend,
   getMarketDataSourceStatus,
-  getQuote,
   mainIndexes
 } from './eastmoney.js';
 import type { MarketStock, SectorType } from './types.js';
@@ -13,6 +12,7 @@ import { getEnabledSources, getSourceSettings } from './source-manager.js';
 import {
   fetchSnapshotBySource,
   fetchIndexesBySource,
+  fetchStockQuoteBySource,
   type IndexQuote,
   fetchSectorsBySource,
   fetchDailyBySource,
@@ -890,11 +890,15 @@ export async function getSectorList(
  */
 export async function getStockQuote(code: string) {
   try {
-    if (!(await isPush2Enabled())) throw new Error('Push2 已禁用');
+    const result = await fromEnabledSources(
+      'quote',
+      (source) => fetchStockQuoteBySource(source, code),
+      (quote) => quote.price > 0
+    );
     return {
-      source: 'eastmoney',
+      source: result.source,
       degraded: false,
-      data: await getQuote(buildSecid(code))
+      data: result.data
     };
   } catch (error) {
     const stock = await getStock(code);
