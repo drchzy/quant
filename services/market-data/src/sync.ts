@@ -12,7 +12,6 @@ import {
   recordSourceResult
 } from './source-manager.js';
 import {
-  getLatestTradeDate,
   getQuote,
   mainIndexes
 } from './eastmoney.js';
@@ -425,7 +424,23 @@ export async function syncDailyMarket(
 
       let tradeDate: string;
       try {
-        tradeDate = await getLatestTradeDate();
+        // 使用启用的日K数据源判断交易日，禁止暗中访问东财。
+        const dailySources = await getEnabledSources('daily');
+        let resolvedDate: string | null = null;
+        for (const source of dailySources) {
+          try {
+            const bars = await fetchDailyBySource(source, '600000', 5, controller.signal);
+            const date = bars.at(-1)?.date?.slice(0, 10);
+            if (date) {
+              resolvedDate = date;
+              break;
+            }
+          } catch (error) {
+            if (controller.signal.aborted) throw error;
+          }
+        }
+        if (!resolvedDate) throw new Error('已启用的数据源无法确定交易日');
+        tradeDate = resolvedDate;
       } catch {
         // 快照源已经成功时，即使交易日日历接口临时失败，也允许按上海时区当天落库。
         tradeDate = new Intl.DateTimeFormat('en-CA', {
@@ -849,6 +864,8 @@ export async function syncHistory(
 export async function syncIndexes(
   signal?: AbortSignal
 ): Promise<void> {
+  const enabled = await getEnabledSources('sector').catch(() => [] as DataSourceId[]);
+  if (!enabled.includes('eastmoney_push2')) return;
   for (const item of mainIndexes) {
     if (signal) ensureNotAborted(signal);
 
