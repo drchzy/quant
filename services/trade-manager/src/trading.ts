@@ -169,7 +169,9 @@ async function saveSignal(
  * 把 stock-select 最新重点候选同步成本地执行计划。
  * 已存在的计划不会覆盖，避免盘中手工确认后的状态被重置。
  */
-export async function syncLatestPlans() {
+let planSyncTask: Promise<any> | null = null;
+
+async function syncLatestPlansCore() {
   const latest = await getLatestSelection(config.monitorTopCount);
 
   if (!latest.run) {
@@ -248,6 +250,16 @@ export async function syncLatestPlans() {
     selectDate: dateText(latest.run.trade_date),
     added
   };
+}
+
+export async function syncLatestPlans() {
+  if (planSyncTask) return planSyncTask;
+
+  planSyncTask = syncLatestPlansCore().finally(() => {
+    planSyncTask = null;
+  });
+
+  return planSyncTask;
 }
 
 function pointsSinceLastUpdate(live: LiveStock, row: any) {
@@ -560,7 +572,9 @@ async function evaluatePlan(row: any, live: LiveStock) {
  * 刷新所有仍需要盘中跟踪的计划和持仓。
  * 每只股票只在本地调用 market-data，由 market-data 再访问东财。
  */
-export async function refreshTrading() {
+let refreshTask: Promise<any> | null = null;
+
+async function refreshTradingCore() {
   await syncLatestPlans();
 
   const rows = await all<any>(
@@ -608,6 +622,16 @@ export async function refreshTrading() {
     updated,
     stale
   };
+}
+
+export async function refreshTrading() {
+  if (refreshTask) return refreshTask;
+
+  refreshTask = refreshTradingCore().finally(() => {
+    refreshTask = null;
+  });
+
+  return refreshTask;
 }
 
 /**
