@@ -4,17 +4,46 @@ import { calculateIndicators } from './indicator.js';
 import {
   buildSecid,
   getBatchQuotes,
-  getDailyKline,
   getIntradayTrend,
   getMarketDataSourceStatus,
-  getMarketStocks,
-  getMinuteKline,
   getQuote,
-  getSectors,
   mainIndexes
 } from './eastmoney.js';
 import type { MarketStock, SectorType } from './types.js';
-import { getSourceSettings } from './source-manager.js';
+import { getEnabledSources, getSourceSettings } from './source-manager.js';
+import {
+  fetchSnapshotBySource,
+  fetchSectorsBySource,
+  fetchDailyBySource,
+  fetchMinuteBySource,
+  type DataCapability,
+  type DataSourceId
+} from './providers.js';
+
+async function isPush2Enabled(): Promise<boolean> {
+  const settings = await getSourceSettings();
+  return settings.some((s) => s.id === 'eastmoney_push2' && s.enabled && s.available);
+}
+
+async function fromEnabledSources<T>(
+  capability: DataCapability,
+  fetcher: (source: DataSourceId) => Promise<T>,
+  valid: (value: T) => boolean = () => true
+): Promise<{ source: DataSourceId; data: T }> {
+  const sources = await getEnabledSources(capability);
+  const failures: string[] = [];
+  for (const source of sources) {
+    try {
+      const data = await fetcher(source);
+      if (!valid(data)) throw new Error('返回数据为空');
+      return { source, data };
+    } catch (error) {
+      failures.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`${capability} 已启用数据源均不可用：${failures.join('; ')}`);
+}
+
 
 let marketCache:
   | { time: number; data: MarketStock[] }
@@ -23,11 +52,11 @@ let marketInflight: Promise<MarketStock[]> | null = null;
 
 const sectorCache = new Map<
   SectorType,
-  { time: number; data: Awaited<ReturnType<typeof getSectors>> }
+  { time: number; data: Awaited<ReturnType<typeof fetchSectorsBySource>> }
 >();
 const sectorInflight = new Map<
   SectorType,
-  Promise<Awaited<ReturnType<typeof getSectors>>>
+  Promise<Awaited<ReturnType<typeof fetchSectorsBySource>>>
 >();
 
 async function getLiveMarket(): Promise<MarketStock[]> {
@@ -42,7 +71,8 @@ async function getLiveMarket(): Promise<MarketStock[]> {
 
   if (marketInflight) return marketInflight;
 
-  marketInflight = getMarketStocks()
+  marketInflight = fromEnabledSources('snapshot', (source) => fetchSnapshotBySource(source), (rows) => rows.length > 0)
+    .then((result) => result.data)
     .then((data) => {
       marketCache = {
         time: Date.now(),
@@ -71,7 +101,8 @@ async function getLiveSectors(type: SectorType) {
   const running = sectorInflight.get(type);
   if (running) return running;
 
-  const task = getSectors(type)
+  const task = fromEnabledSources('sector', (source) => fetchSectorsBySource(source, type), (rows) => rows.length > 0)
+    .then((result) => result.data)
     .then((data) => {
       sectorCache.set(type, {
         time: Date.now(),
@@ -188,6 +219,7 @@ export async function getMarketOverview(live = true) {
     }
 
     try {
+      if (!(await isPush2Enabled())) throw new Error('Push2 已禁用');
       const quotes = await getBatchQuotes(
         mainIndexes.map((item) => item.secid)
       );
@@ -385,7 +417,7 @@ export async function getDaily(
   refresh = false
 ) {
   if (refresh) {
-    const result = await getDailyKline(code, days, 1);
+    const result = await fromEnabledSources('daily', (source) => fetchDailyBySource(source, code, days), (rows) => rows.length > 0);
 
     for (const item of result.data) {
       await run(
@@ -438,11 +470,7 @@ export async function getMinute(
   refresh = true
 ) {
   if (refresh) {
-    const result = await getMinuteKline(
-      code,
-      period as 1 | 5 | 15 | 30 | 60,
-      limit
-    );
+    const result = await fromEnabledSources('minute', (source) => fetchMinuteBySource(source, code, period as 1 | 5 | 15 | 30 | 60, limit), (rows) => rows.length > 0);
 
     for (const item of result.data) {
       await run(
@@ -774,8 +802,7 @@ export async function getSectorList(
   live = true
 ) {
   if (live) {
-    const sources = await getSourceSettings();
-    if (sources.some((item) => item.id === 'eastmoney_push2' && item.enabled)) {
+    if (await isPush2Enabled()) {
       try {
         return await getLiveSectors(type);
       } catch {
@@ -797,6 +824,7 @@ export async function getSectorList(
  */
 export async function getStockQuote(code: string) {
   try {
+    if (!(await isPush2Enabled())) throw new Error('Push2 已禁用');
     return {
       source: 'eastmoney',
       degraded: false,
@@ -834,8 +862,9 @@ export async function getStockQuote(code: string) {
   }
 }
 
-export async function getStockIntraday(code: string) {
+export async function getStockIntraday(code: string, fallbackMinute?: any[]) {
   try {
+    if (!(await isPush2Enabled())) throw new Error('Push2 已禁用');
     const data = await getIntradayTrend(buildSecid(code));
 
     if (data.length > 0) {
@@ -849,7 +878,7 @@ export async function getStockIntraday(code: string) {
     // 继续走分钟K备用源。
   }
 
-  const minute = await getMinute(code, 1, 240, true);
+  const minute = fallbackMinute ?? await getMinute(code, 1, 240, true);
 
   return {
     source: 'minute-kline-fallback',
@@ -867,14 +896,14 @@ export async function getStockIntraday(code: string) {
 }
 
 export async function getAiStock(code: string) {
-  const [stock, quoteResult, daily, minute, intradayResult] =
+  const [stock, quoteResult, daily, minute] =
     await Promise.all([
       getStock(code),
       getStockQuote(code),
       getDaily(code, 120, false),
-      getMinute(code, 1, 240, true),
-      getStockIntraday(code)
+      getMinute(code, 1, 240, true)
     ]);
+  const intradayResult = await getStockIntraday(code, minute);
 
   return {
     code,
