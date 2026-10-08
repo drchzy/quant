@@ -158,7 +158,13 @@ async function updateJobSource(
   jobId: string,
   source: DataSourceId,
   values: {
-    status: 'waiting' | 'running' | 'success' | 'failed' | 'cancelled';
+    status:
+      | 'waiting'
+      | 'running'
+      | 'success'
+      | 'failed'
+      | 'cancelled'
+      | 'skipped';
     message?: string;
     start?: boolean;
     finish?: boolean;
@@ -236,6 +242,23 @@ async function trySources<T>(
         latencyMs,
         count
       });
+
+      const sourceIndex = sources.indexOf(source);
+      for (
+        let index = sourceIndex + 1;
+        index < sources.length;
+        index += 1
+      ) {
+        await updateJobSource(
+          jobId,
+          sources[index],
+          {
+            status: 'skipped',
+            message: '前面的数据源已成功，本次未请求',
+            finish: true
+          }
+        );
+      }
 
       return { source, data };
     } catch (error) {
@@ -647,6 +670,23 @@ export async function syncHistory(
 
       let done = 0;
       let failed = 0;
+      const sourceStats = new Map<
+        DataSourceId,
+        { success: number; failed: number }
+      >(
+        sources.map((source) => [
+          source,
+          { success: 0, failed: 0 }
+        ])
+      );
+
+      for (const source of sources) {
+        await updateJobSource(jobId, source, {
+          status: 'running',
+          message: '历史日K任务进行中',
+          start: true
+        });
+      }
 
       for (const stock of stocks) {
         ensureNotAborted(controller.signal);
@@ -672,6 +712,8 @@ export async function syncHistory(
             }
 
             selectedSource = source;
+            const stat = sourceStats.get(source);
+            if (stat) stat.success += 1;
 
             await recordSourceResult(source, {
               status: 'success',
@@ -697,6 +739,8 @@ export async function syncHistory(
                 ? error.message
                 : String(error);
             errors.push(`${source}: ${message}`);
+            const stat = sourceStats.get(source);
+            if (stat) stat.failed += 1;
 
             await recordSourceResult(source, {
               status: 'failed',
@@ -759,6 +803,21 @@ export async function syncHistory(
             '前10只股票所有历史数据源均失败，已停止任务，请先在数据源管理中逐个测试'
           );
         }
+      }
+
+      for (const source of sources) {
+        const stat = sourceStats.get(source)!;
+        await updateJobSource(jobId, source, {
+          status:
+            stat.success > 0
+              ? 'success'
+              : stat.failed > 0
+                ? 'failed'
+                : 'skipped',
+          message:
+            `成功 ${stat.success} 只，失败 ${stat.failed} 只`,
+          finish: true
+        });
       }
 
       await updateJob(jobId, {
