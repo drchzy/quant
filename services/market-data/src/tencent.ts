@@ -15,6 +15,10 @@ export interface FallbackKLine {
 }
 
 const endpoints = [
+  // newfqkline 在部分网络和北交所上的兼容性更好，优先尝试。
+  'https://ifzq.gtimg.cn/appstock/app/newfqkline/get',
+  'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get',
+  'https://web.ifzq.gtimg.cn/appstock/app/newfqkline/get',
   'https://ifzq.gtimg.cn/appstock/app/fqkline/get',
   'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get',
   'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get'
