@@ -76,7 +76,7 @@ export async function initDatabase(): Promise<void> {
   `);
 
 
-  await run(\`
+  await run(`
     CREATE TABLE IF NOT EXISTS select_review (
       run_id VARCHAR NOT NULL,
       code VARCHAR NOT NULL,
@@ -102,9 +102,9 @@ export async function initDatabase(): Promise<void> {
       updated_at TIMESTAMP NOT NULL,
       PRIMARY KEY (run_id, code)
     )
-  \`);
+  `);
 
-  await run(\`
+  await run(`
     CREATE TABLE IF NOT EXISTS backtest_run (
       id VARCHAR PRIMARY KEY,
       status VARCHAR NOT NULL,
@@ -119,9 +119,9 @@ export async function initDatabase(): Promise<void> {
       created_at TIMESTAMP NOT NULL,
       finished_at TIMESTAMP
     )
-  \`);
+  `);
 
-  await run(\`
+  await run(`
     CREATE TABLE IF NOT EXISTS backtest_parameter (
       backtest_id VARCHAR NOT NULL,
       rank INTEGER NOT NULL,
@@ -139,7 +139,7 @@ export async function initDatabase(): Promise<void> {
       score DOUBLE,
       PRIMARY KEY (backtest_id, rank)
     )
-  \`);
+  `);
 }
 
 export async function closeDatabase(): Promise<void> {
