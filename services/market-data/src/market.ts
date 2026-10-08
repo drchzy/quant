@@ -392,7 +392,7 @@ export async function getDaily(
           code, trade_date, open, close, high, low,
           volume, amount, pct, change, amplitude, turnover,
           source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
         [
           code,
           item.date.slice(0, 10),
@@ -448,7 +448,7 @@ export async function getMinute(
         `INSERT OR REPLACE INTO minute_price (
           code, period, trade_time, open, close, high, low,
           volume, amount, pct, change, turnover, source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
         [
           code,
           period,
