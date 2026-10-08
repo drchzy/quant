@@ -239,7 +239,7 @@ var response=await fetch(cfg.base+'/api/v1/bridge/status',{headers:{'X-Bridge-To
 var selected=cfg.scope==='selected';var needsStock=cfg.types.some(function(t){return t==='daily'||t==='minute'||t==='intraday';});
 var universe=[];
 var hasName=selected&&!/^\s*\d{6}([\s,，;；、]+\d{6})*\s*$/.test($('stocks').value);
-if(cfg.scope==='all'||hasName) {
+if((cfg.scope==='all'&&(needsStock||cfg.types.includes('snapshot')))||(hasName&&(needsStock||cfg.types.includes('snapshot')))) {
   universe=await loadUniverse(cfg,cfg.scope==='all'&&cfg.types.includes('snapshot'));
 }
 if(cfg.types.includes('index'))await indexes(cfg);
