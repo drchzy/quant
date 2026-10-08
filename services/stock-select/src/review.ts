@@ -115,8 +115,8 @@ export function simulatePlan(
       maxProfitPct: null,
       maxLossPct: null,
       ...nextBase,
-      hitTakeProfit1: Number(next.high) >= plan.takeProfit1,
-      hitTakeProfit2: Number(next.high) >= plan.takeProfit2,
+      hitTakeProfit1: false,
+      hitTakeProfit2: false,
       daysHeld: 0
     };
   }
