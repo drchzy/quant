@@ -1,5 +1,7 @@
 # Quant
 
+> 当前开发分支：`feat/market-data`
+
 本地 A 股行情与量化研究平台。
 
 当前完成第一阶段：**market-data**。
