@@ -359,6 +359,197 @@ export async function getMinute(
   return data;
 }
 
+
+function avg(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function roundNumber(value: number | null, digits = 3): number | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(digits));
+}
+
+/**
+ * 返回全市场用于策略筛选的技术数据。
+ *
+ * 这里仍属于“行情加工层”，只计算客观指标，不做选股结论。
+ * stock-select 服务会基于这些字段执行具体策略。
+ */
+export async function getTechnicalStocks(days = 30) {
+  const safeDays = Math.min(Math.max(days, 21), 120);
+
+  const rows = await all<any>(
+    \`WITH ranked AS (
+       SELECT
+         s.code,
+         s.name,
+         s.market_name,
+         d.trade_date,
+         d.open,
+         d.close,
+         d.high,
+         d.low,
+         d.pre_close,
+         d.volume,
+         d.amount,
+         d.pct,
+         d.change,
+         d.amplitude,
+         d.turnover,
+         d.pe,
+         d.pb,
+         d.volume_ratio,
+         d.total_market_cap,
+         d.float_market_cap,
+         ROW_NUMBER() OVER (
+           PARTITION BY d.code
+           ORDER BY d.trade_date DESC
+         ) AS rn
+       FROM daily_price d
+       JOIN stock s ON s.code = d.code
+     )
+     SELECT *
+     FROM ranked
+     WHERE rn <= ?
+     ORDER BY code, trade_date\`,
+    [safeDays]
+  );
+
+  const groups = new Map<string, any[]>();
+
+  for (const row of rows) {
+    const list = groups.get(row.code) || [];
+    list.push(row);
+    groups.set(row.code, list);
+  }
+
+  const data: any[] = [];
+
+  for (const [code, list] of groups) {
+    if (list.length < 20) continue;
+
+    const current = list.at(-1)!;
+    const previous = list.length >= 2 ? list.at(-2)! : null;
+    const closes = list.map((row) => Number(row.close));
+    const volumes = list.map((row) => Number(row.volume || 0));
+    const amounts = list.map((row) => Number(row.amount || 0));
+
+    const ma5 = avg(closes.slice(-5));
+    const ma10 = avg(closes.slice(-10));
+    const ma20 = avg(closes.slice(-20));
+
+    const ma5Prev =
+      closes.length >= 6 ? avg(closes.slice(-6, -1)) : null;
+    const ma10Prev =
+      closes.length >= 11 ? avg(closes.slice(-11, -1)) : null;
+
+    const close = Number(current.close);
+    const ret5 =
+      closes.length >= 6
+        ? (close / closes[closes.length - 6] - 1) * 100
+        : null;
+    const ret20 =
+      closes.length >= 21
+        ? (close / closes[closes.length - 21] - 1) * 100
+        : null;
+
+    // 突破判断使用“当前交易日前”的20日高点，避免把当天最高价算进去。
+    const previous20 = list.slice(-21, -1);
+    const previousHigh20 =
+      previous20.length > 0
+        ? Math.max(...previous20.map((row) => Number(row.high)))
+        : null;
+    const previousLow20 =
+      previous20.length > 0
+        ? Math.min(...previous20.map((row) => Number(row.low)))
+        : null;
+
+    const avgVolume5 = avg(volumes.slice(-6, -1));
+    const avgAmount5 = avg(amounts.slice(-6, -1));
+    const volumeRate5 =
+      avgVolume5 && avgVolume5 > 0
+        ? Number(current.volume || 0) / avgVolume5
+        : null;
+
+    const high = Number(current.high || close);
+    const low = Number(current.low || close);
+    const closeStrength =
+      high > low ? (close - low) / (high - low) : 0.5;
+
+    const closeToMa5 =
+      ma5 && ma5 > 0 ? (close / ma5 - 1) * 100 : null;
+
+    const highToClose =
+      high > low ? (high - close) / (high - low) : 0;
+
+    data.push({
+      code,
+      name: current.name,
+      marketName: current.market_name,
+      tradeDate: String(current.trade_date).slice(0, 10),
+      open: Number(current.open),
+      close,
+      high,
+      low,
+      preClose: Number(current.pre_close || 0),
+      pct: Number(current.pct || 0),
+      amount: Number(current.amount || 0),
+      volume: Number(current.volume || 0),
+      turnover:
+        current.turnover === null ? null : Number(current.turnover),
+      volumeRatio:
+        current.volume_ratio === null
+          ? null
+          : Number(current.volume_ratio),
+      pe: current.pe === null ? null : Number(current.pe),
+      pb: current.pb === null ? null : Number(current.pb),
+      marketCap: Number(current.total_market_cap || 0),
+      floatMarketCap: Number(current.float_market_cap || 0),
+      ma5: roundNumber(ma5),
+      ma10: roundNumber(ma10),
+      ma20: roundNumber(ma20),
+      ma5Prev: roundNumber(ma5Prev),
+      ma10Prev: roundNumber(ma10Prev),
+      return5: roundNumber(ret5),
+      return20: roundNumber(ret20),
+      previousHigh20: roundNumber(previousHigh20),
+      previousLow20: roundNumber(previousLow20),
+      volumeRate5: roundNumber(volumeRate5),
+      avgAmount5: roundNumber(avgAmount5, 0),
+      closeStrength: roundNumber(closeStrength),
+      closeToMa5: roundNumber(closeToMa5),
+      highToClose: roundNumber(highToClose),
+      previousPct:
+        previous?.pct === null || previous?.pct === undefined
+          ? null
+          : Number(previous.pct),
+      previousOpen:
+        previous?.open === null || previous?.open === undefined
+          ? null
+          : Number(previous.open),
+      previousClose:
+        previous?.close === null || previous?.close === undefined
+          ? null
+          : Number(previous.close),
+      historyDays: list.length
+    });
+  }
+
+  return {
+    tradeDate:
+      data.length > 0
+        ? data.reduce(
+            (latest, item) =>
+              item.tradeDate > latest ? item.tradeDate : latest,
+            data[0].tradeDate
+          )
+        : null,
+    count: data.length,
+    data
+  };
+}
+
 export async function getSectorList(
   type: SectorType,
   live = true
