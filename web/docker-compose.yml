@@ -1,0 +1,26 @@
+services:
+  quant:
+    image: ${QUANT_IMAGE:-drchzy/quant:latest}
+    container_name: quant
+    restart: unless-stopped
+
+    # 只暴露一个端口。
+    ports:
+      - "${WEB_PORT:-8088}:8088"
+
+    # 整个运行目录一次性映射：
+    # .env + data/*.duckdb 都在当前 web/ 目录。
+    volumes:
+      - ./:/app/web
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "Promise.all(['http://127.0.0.1:8080/health','http://127.0.0.1:8090/health','http://127.0.0.1:8091/health','http://127.0.0.1:8088/'].map(u=>fetch(u).then(r=>{if(!r.ok)throw new Error(u)}))).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
