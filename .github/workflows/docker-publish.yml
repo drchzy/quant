@@ -3,6 +3,8 @@ name: Publish Docker Image
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "publish/quant-amd64"
     tags:
       - "v*"
 
