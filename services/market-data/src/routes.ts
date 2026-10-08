@@ -6,15 +6,16 @@ import {
   getMinute,
   getSectorList,
   getStock,
+  getStockIntraday,
   getStockList,
+  getStockQuote,
   getTechnicalStocks,
   getFuturePrices,
   getTradeDates,
   searchStocks
 } from './market.js';
 import {
-  buildSecid,
-  eastmoney,
+  getMarketDataSourceStatus,
   normalizeStockCode
 } from './eastmoney.js';
 import {
@@ -48,6 +49,10 @@ export async function registerRoutes(
       sort: query.sort,
       order: query.order === 'asc' ? 'asc' : 'desc'
     });
+  });
+
+  app.get('/api/v1/market/source-status', async () => {
+    return getMarketDataSourceStatus();
   });
 
   app.get('/api/v1/market/technical', async (request) => {
@@ -136,10 +141,11 @@ export async function registerRoutes(
       const { code } = request.params as { code: string };
       const normalized = normalizeStockCode(code);
 
+      const result = await getStockQuote(normalized);
+
       return {
         code: normalized,
-        source: 'eastmoney',
-        data: await eastmoney.quote(buildSecid(normalized))
+        ...result
       };
     } catch (error) {
       return reply.code(400).send({
@@ -227,14 +233,14 @@ export async function registerRoutes(
     try {
       const { code } = request.params as { code: string };
       const normalized = normalizeStockCode(code);
-      const data = await eastmoney.intradayTrend(
-        buildSecid(normalized)
-      );
+      const result = await getStockIntraday(normalized);
 
       return {
         code: normalized,
-        count: data.length,
-        data
+        source: result.source,
+        degraded: result.degraded,
+        count: result.data.length,
+        data: result.data
       };
     } catch (error) {
       return reply.code(400).send({
