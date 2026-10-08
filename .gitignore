@@ -6,3 +6,7 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+runtime/config/.env
+runtime/data/*
+!runtime/data/.gitkeep
