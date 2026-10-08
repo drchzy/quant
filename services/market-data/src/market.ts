@@ -938,19 +938,20 @@ export async function getStockQuote(code: string) {
 }
 
 export async function getStockIntraday(code: string, fallbackMinute?: any[]) {
-  try {
-    if (!(await isPush2Enabled())) throw new Error('Push2 已禁用');
-    const data = await getIntradayTrend(buildSecid(code));
-
-    if (data.length > 0) {
-      return {
-        source: 'eastmoney',
-        degraded: false,
-        data
-      };
+  // AI 接口传入已经按优先级获取的分钟K，不能再额外访问东财。
+  if (!fallbackMinute) {
+    const minuteSources = await getEnabledSources('minute').catch(() => [] as DataSourceId[]);
+    // 仅当 Push2 本身排在分钟能力优先级第一时才尝试专用分时。
+    if (minuteSources[0] === 'eastmoney_push2' && await isPush2Enabled()) {
+      try {
+        const data = await getIntradayTrend(buildSecid(code));
+        if (data.length > 0) {
+          return { source: 'eastmoney_push2', degraded: false, data };
+        }
+      } catch {
+        // 专用分时不可用后，依照分钟K配置继续降级。
+      }
     }
-  } catch {
-    // 继续走分钟K备用源。
   }
 
   const minute = fallbackMinute ?? await getMinute(code, 1, 240, true);
