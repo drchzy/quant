@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Quant 外部行情采集桥接</title>
-<style>
+<style>table td,table th{padding:9px 11px;border-bottom:1px solid #e5ebf3}code{font-family:ui-monospace,monospace}
+
 :root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#17324c;background:#f5f8fc}
 *{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:28px 18px 55px}
 header{display:flex;justify-content:space-between;align-items:center;gap:20px}h1{font-size:27px;margin:0 0 8px}h2{font-size:18px;margin:0 0 16px}
@@ -61,6 +62,21 @@ pre{height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;backgr
 <small class="muted">全市场模式将分页检索 A 股代码；日/分钟 K 按代码逐只查询。东财分时接口通常只能提供最近 1～5 个交易日，不能保证指定的任意历史日期都有数据。</small>
 </section>
 <section>
+<h2>东财接口清单（全部由本机浏览器发起请求）</h2>
+<div style="overflow-x:auto">
+<table style="width:100%;text-align:left;border-collapse:collapse;font-size:13px">
+<thead><tr><th>业务类型</th><th>东方财富接口路径</th><th>筛选维度</th></tr></thead>
+<tbody>
+<tr><td>全市场快照 / 股票清单</td><td><code>/api/qt/clist/get</code></td><td>分页、市场、股票名称/代码</td></tr>
+<tr><td>日 K / 历史分钟 K</td><td><code>/api/qt/stock/kline/get</code></td><td>股票、日期范围、周期、复权</td></tr>
+<tr><td>盘中分时</td><td><code>/api/qt/stock/trends2/get</code></td><td>股票、最近 1～5 日</td></tr>
+<tr><td>行业 / 概念板块</td><td><code>/api/qt/clist/get</code></td><td>板块类型、分页</td></tr>
+<tr><td>主要指数行情</td><td><code>/api/qt/ulist.np/get</code></td><td>5 大主要指数</td></tr>
+</tbody></table>
+</div>
+<small class="muted">调用真实 HTTPS 域名：<code>push2delay.eastmoney.com</code>、<code>push2.eastmoney.com</code>、<code>push2his.eastmoney.com</code>；无法使用 JSONP 的接口会提示失败。</small>
+</section>
+<section>
 <h2>3. 采集频率及保护措施</h2>
 <div class="grid">
 <label><b>请求间隔（毫秒）</b><input type="number" id="interval" min="200" max="60000" value="1300"><small>所有外部请求串行；建议不少于 1000 ms</small></label>
@@ -108,7 +124,7 @@ $('target').value=location.protocol==='http:'||location.protocol==='https:'?loca
 function today(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
 function backDays(n){var d=new Date();d.setDate(d.getDate()-n);return d.toISOString().slice(0,10);}
 $('to').value=today();$('from').value=backDays(30);
-function log(msg){var p=$('log');var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});p.textContent+='\\n['+t+'] '+msg;var ls=p.textContent.split('\\n');if(ls.length>250)p.textContent=ls.slice(-240).join('\\n');p.scrollTop=p.scrollHeight;}
+function log(msg){var p=$('log');var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});p.textContent+='\n['+t+'] '+msg;var ls=p.textContent.split('\n');if(ls.length>250)p.textContent=ls.slice(-240).join('\n');p.scrollTop=p.scrollHeight;}
 function show(){Object.keys(counts).forEach(function(k){$(k).textContent=counts[k];});}
 function n(v){return v===null||v===undefined||v===''||v==='-'?null:(Number.isFinite(Number(v))?Number(v):null);}
 function safeDate(d){return String(d||'').slice(0,10).replace(/\//g,'-');}
@@ -154,7 +170,7 @@ async function testServer(){var cfg=options();try{var r=await fetch(cfg.base+'/a
 $('test').onclick=function(){void testServer();};
 function clistArgs(page,fs){return {pn:page,pz:100,po:1,np:1,fltt:2,invt:2,fid:'f3',fs:fs,fields:'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23'};}
 var stockFs='m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048';
-function snapshotRow(r,cfg){return {code:String(r.f12||''),name:String(r.f14||''),tradeDate:cfg.to||today(),close:n(r.f2),pct:n(r.f3),change:n(r.f4),volume:n(r.f5),amount:n(r.f6),amplitude:n(r.f7),turnover:n(r.f8),pe:n(r.f9),volumeRatio:n(r.f10),high:n(r.f15),low:n(r.f16),open:n(r.f17),preClose:n(r.f18),totalMarketCap:n(r.f20),floatMarketCap:n(r.f21),pb:n(r.f23)};}
+function snapshotRow(r,cfg){return {code:String(r.f12||''),name:String(r.f14||''),tradeDate:today(),close:n(r.f2),pct:n(r.f3),change:n(r.f4),volume:n(r.f5),amount:n(r.f6),amplitude:n(r.f7),turnover:n(r.f8),pe:n(r.f9),volumeRatio:n(r.f10),high:n(r.f15),low:n(r.f16),open:n(r.f17),preClose:n(r.f18),totalMarketCap:n(r.f20),floatMarketCap:n(r.f21),pb:n(r.f23)};}
 async function loadUniverse(cfg,store){
 var result=[];var page=1,total=0;
 while(page<=100){await gate();var d=await upstream('live','/api/qt/clist/get',clistArgs(page,stockFs),cfg);var raw=d.diff;if(!Array.isArray(raw)||raw.length===0)break;
