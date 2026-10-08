@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { all, one, run } from './database.js';
-import { getLiveStock } from './market-data.js';
+import { getLiveStock, getTradeDates } from './market-data.js';
 import {
   getLatestSelection,
   getSelectionContext
@@ -35,7 +35,19 @@ function round(value: number, digits = 2): number {
 
 function dateText(value: unknown): string | null {
   if (!value) return null;
-  return String(value).slice(0, 10);
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const text = String(value);
+  const direct = text.match(/^\d{4}-\d{2}-\d{2}/);
+  if (direct) return direct[0];
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed.toISOString().slice(0, 10);
 }
 
 function parsePlan(row: any): TradePlanRule {
@@ -224,11 +236,99 @@ export async function syncLatestPlans() {
   };
 }
 
-function pointsAfterEntry(live: LiveStock, entryTime: string | null) {
-  if (!entryTime) return live.intraday;
+function pointsSinceLastUpdate(live: LiveStock, row: any) {
+  const start = row.last_market_time || row.entry_time;
+
+  if (!start) return live.intraday;
+
   return live.intraday.filter(
-    (item) => String(item.datetime) >= entryTime.slice(0, 16)
+    (item) => String(item.datetime) > String(start).slice(0, 16)
   );
+}
+
+function replayHolding(
+  row: any,
+  live: LiveStock,
+  plan: TradePlanRule
+) {
+  const entryPrice = number(row.entry_price);
+  const hardStop = number(
+    plan.stopPrice,
+    entryPrice * (1 - config.defaultStopPct / 100)
+  );
+
+  let highest = Math.max(
+    number(row.highest_price, entryPrice),
+    entryPrice
+  );
+  let trailingStop = nullableNumber(row.trailing_stop);
+  let stopSignal: 'STOP_LOSS' | 'TRAILING_STOP' | null = null;
+  let stopPrice: number | null = null;
+  let stopTime: string | null = null;
+  let target1Touched = false;
+  let target2Touched = false;
+
+  const points = pointsSinceLastUpdate(live, row);
+
+  for (const point of points) {
+    const price = number(point.price);
+    if (!(price > 0)) continue;
+
+    const effectiveStop =
+      trailingStop === null
+        ? hardStop
+        : Math.max(hardStop, trailingStop);
+
+    // 先检查这一分钟开始前已经生效的保护价，再更新新的阶段高点。
+    if (!stopSignal && price <= effectiveStop) {
+      stopSignal =
+        trailingStop !== null && effectiveStop === trailingStop
+          ? 'TRAILING_STOP'
+          : 'STOP_LOSS';
+      stopPrice = effectiveStop;
+      stopTime = point.datetime;
+    }
+
+    if (price >= number(plan.takeProfit1, entryPrice * 1.04)) {
+      target1Touched = true;
+    }
+
+    if (price >= number(plan.takeProfit2, entryPrice * 1.06)) {
+      target2Touched = true;
+    }
+
+    highest = Math.max(highest, price);
+
+    if (
+      highest >=
+      entryPrice *
+        (1 +
+          number(
+            plan.trailingStartPct,
+            config.defaultTrailingStartPct
+          ) /
+            100)
+    ) {
+      trailingStop =
+        highest *
+        (1 -
+          number(
+            plan.trailingDrawdownPct,
+            config.defaultTrailingDrawdownPct
+          ) /
+            100);
+    }
+  }
+
+  return {
+    highest,
+    trailingStop,
+    stopSignal,
+    stopPrice,
+    stopTime,
+    target1Touched,
+    target2Touched
+  };
 }
 
 async function evaluatePlan(row: any, live: LiveStock) {
@@ -309,94 +409,76 @@ async function evaluatePlan(row: any, live: LiveStock) {
     holdDays += 1;
   }
 
-  const afterEntry = pointsAfterEntry(live, row.entry_time);
-  const postHigh = afterEntry.length
-    ? Math.max(...afterEntry.map((item) => number(item.price)))
-    : live.price;
-  const postLow = afterEntry.length
-    ? Math.min(...afterEntry.map((item) => number(item.price)))
-    : live.price;
-
-  const highest = Math.max(
-    number(row.highest_price, entryPrice),
-    postHigh,
-    live.price
-  );
-
-  const trailingStarted =
-    highest >=
-    entryPrice *
-      (1 + number(plan.trailingStartPct, config.defaultTrailingStartPct) / 100);
-
-  const trailingStop = trailingStarted
-    ? highest *
-      (1 -
-        number(
-          plan.trailingDrawdownPct,
-          config.defaultTrailingDrawdownPct
-        ) /
-          100)
-    : null;
-
-  const hardStop = number(
-    plan.stopPrice,
-    entryPrice * (1 - config.defaultStopPct / 100)
-  );
-  const effectiveStop =
-    trailingStop === null
-      ? hardStop
-      : Math.max(hardStop, trailingStop);
-
-  const stopTouched = postLow <= effectiveStop;
-  const target2Touched =
-    postHigh >= number(plan.takeProfit2, entryPrice * 1.06);
-  const target1Touched =
-    postHigh >= number(plan.takeProfit1, entryPrice * 1.04);
-
-  // A股普通股票T+1：买入当天即使触发止损/止盈，也只能提示风险，不能给出可执行卖出状态。
+  const replay = replayHolding(row, live, plan);
   const canSell = !!entryDate && marketDate > entryDate;
 
-  if (!canSell && (stopTouched || target2Touched)) {
+  // 一旦产生可执行卖出信号，就保持该信号，直到用户确认实际卖出。
+  if (row.state === 'sell_ready') {
+    await saveSignal(row, {
+      state: 'sell_ready',
+      signal: row.signal as TradeSignal,
+      reason: row.signal_reason || '已触发卖出条件，等待确认',
+      live,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
+      holdDays
+    });
+    return;
+  }
+
+  // 买入当天一旦触发退出风险，整天保持T+1锁定提醒。
+  if (row.state === 't1_locked' && !canSell) {
     await saveSignal(row, {
       state: 't1_locked',
       signal: 'T1_LOCKED_RISK',
-      reason: stopTouched
-        ? `买入当日触及保护价 ${round(effectiveStop)}，但受T+1限制无法卖出`
+      reason: row.signal_reason || '买入当天触发风险，但受T+1限制无法卖出',
+      live,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
+      holdDays
+    });
+    return;
+  }
+
+  if (!canSell && (replay.stopSignal || replay.target2Touched)) {
+    await saveSignal(row, {
+      state: 't1_locked',
+      signal: 'T1_LOCKED_RISK',
+      reason: replay.stopSignal
+        ? `买入当日触及保护价 ${round(replay.stopPrice || number(plan.stopPrice))}，但受T+1限制无法卖出`
         : `买入当日触及第二止盈 ${plan.takeProfit2}，但受T+1限制无法卖出`,
       live,
-      highestPrice: highest,
-      trailingStop,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
       holdDays
     });
     return;
   }
 
-  if (canSell && stopTouched) {
-    const trailingExit =
-      trailingStop !== null && effectiveStop === trailingStop;
-
+  if (canSell && replay.stopSignal) {
     await saveSignal(row, {
       state: 'sell_ready',
-      signal: trailingExit ? 'TRAILING_STOP' : 'STOP_LOSS',
-      reason: trailingExit
-        ? `价格触及移动保护价 ${round(effectiveStop)}，执行保护利润`
-        : `价格触及止损价 ${round(effectiveStop)}，执行止损`,
+      signal: replay.stopSignal,
+      reason:
+        replay.stopSignal === 'TRAILING_STOP'
+          ? `价格在 ${replay.stopTime} 触及移动保护价 ${round(replay.stopPrice || 0)}，执行保护利润`
+          : `价格在 ${replay.stopTime} 触及止损价 ${round(replay.stopPrice || 0)}，执行止损`,
       live,
-      highestPrice: highest,
-      trailingStop,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
       holdDays
     });
     return;
   }
 
-  if (canSell && target2Touched) {
+  if (canSell && replay.target2Touched) {
     await saveSignal(row, {
       state: 'sell_ready',
       signal: 'TAKE_PROFIT_2',
-      reason: `价格触及第二止盈 ${plan.takeProfit2}，可以按计划落袋`,
+      reason: `盘中触及第二止盈 ${plan.takeProfit2}，可以按计划落袋`,
       live,
-      highestPrice: highest,
-      trailingStop,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
       holdDays
     });
     return;
@@ -412,34 +494,34 @@ async function evaluatePlan(row: any, live: LiveStock) {
       signal: 'TIME_EXIT',
       reason: `已持有 ${holdDays} 个交易日，进入时间止损窗口`,
       live,
-      highestPrice: highest,
-      trailingStop,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
       holdDays
     });
     return;
   }
 
-  if (target1Touched) {
+  if (replay.target1Touched) {
     await saveSignal(row, {
-      state: trailingStarted ? 'trailing' : 'holding',
+      state: replay.trailingStop === null ? 'holding' : 'trailing',
       signal: 'TAKE_PROFIT_1',
-      reason: `已触及第一止盈 ${plan.takeProfit1}，可考虑锁定部分利润`,
+      reason: `盘中已触及第一止盈 ${plan.takeProfit1}，可考虑锁定部分利润`,
       live,
-      highestPrice: highest,
-      trailingStop,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
       holdDays
     });
     return;
   }
 
-  if (trailingStarted) {
+  if (replay.trailingStop !== null) {
     await saveSignal(row, {
       state: 'trailing',
       signal: 'TRAILING_ACTIVE',
-      reason: `移动止盈已启动，当前保护价约 ${round(effectiveStop)}`,
+      reason: `移动止盈已启动，当前保护价约 ${round(Math.max(number(plan.stopPrice), replay.trailingStop))}`,
       live,
-      highestPrice: highest,
-      trailingStop,
+      highestPrice: replay.highest,
+      trailingStop: replay.trailingStop,
       holdDays
     });
     return;
@@ -450,8 +532,8 @@ async function evaluatePlan(row: any, live: LiveStock) {
     signal: 'HOLD',
     reason: '持仓仍在计划范围内，继续观察',
     live,
-    highestPrice: highest,
-    trailingStop,
+    highestPrice: replay.highest,
+    trailingStop: replay.trailingStop,
     holdDays
   });
 }
@@ -575,7 +657,12 @@ export async function confirmBuy(
     throw new Error('买入价格必须大于0');
   }
 
-  const marketTime = row.last_market_time || localMarketTime();
+  const today = getMarketClock().date;
+  const marketTime =
+    row.last_market_time &&
+    String(row.last_market_time).startsWith(today)
+      ? row.last_market_time
+      : localMarketTime();
   const entryDate = String(marketTime).slice(0, 10);
 
   await run(
@@ -644,7 +731,11 @@ export async function confirmSell(
     throw new Error('卖出价格必须大于0');
   }
 
-  const exitTime = row.last_market_time || localMarketTime();
+  const exitTime =
+    row.last_market_time &&
+    String(row.last_market_time).startsWith(currentDate)
+      ? row.last_market_time
+      : localMarketTime();
   const returnPct =
     (exitPrice / number(row.entry_price) - 1) * 100;
   const exitReason = reason || row.signal_reason || '手工确认卖出';
@@ -753,10 +844,21 @@ export async function addManualPosition(input: {
   }
 
   const id = `manual:${randomUUID()}`;
-  const entryDate =
-    input.entryDate || getMarketClock().date;
+  const today = getMarketClock().date;
+  const entryDate = input.entryDate || today;
   const plan = manualPlan(Number(input.entryPrice), input);
   const name = input.name || live?.name || input.code;
+
+  let holdDays = 1;
+  try {
+    const dates = await getTradeDates(250);
+    const count = dates.data.filter(
+      (date) => date >= entryDate && date <= today
+    ).length;
+    holdDays = Math.max(count, 1);
+  } catch {
+    // 无法取得交易日历时，从1天开始继续累计。
+  }
 
   await run(
     `INSERT INTO trade_plan (
@@ -776,7 +878,7 @@ export async function addManualPosition(input: {
       ?, ?, ?, ?, ?,
       ?, ?,
       CAST(? AS DATE), ?, ?, ?,
-      ?, NULL, 1,
+      ?, NULL, ?,
       NULL, NULL, NULL, NULL, NULL,
       current_timestamp, current_timestamp
     )`,
@@ -798,7 +900,8 @@ export async function addManualPosition(input: {
       input.quantity && input.quantity > 0
         ? Math.floor(input.quantity)
         : null,
-      Math.max(Number(input.entryPrice), live?.price || 0)
+      Math.max(Number(input.entryPrice), live?.price || 0),
+      holdDays
     ]
   );
 
@@ -843,7 +946,8 @@ export async function getTradingOverview() {
   const rows = await all<any>(
     `SELECT *
      FROM trade_plan
-     WHERE state <> 'closed'
+     WHERE state NOT IN ('closed', 'expired', 'invalid')
+        OR last_seen_date = CAST(? AS DATE)
      ORDER BY
        CASE
          WHEN state = 'sell_ready' THEN 0
@@ -853,13 +957,26 @@ export async function getTradingOverview() {
          ELSE 4
        END,
        rank NULLS LAST,
-       created_at DESC`
+       created_at DESC`,
+    [getMarketClock().date]
   );
 
-  const data = rows.map((row) => ({
-    ...row,
-    plan: parsePlan(row)
-  }));
+  const data = rows.map((row) => {
+    const entry = nullableNumber(row.entry_price);
+    const current = nullableNumber(row.current_price);
+
+    return {
+      ...row,
+      plan: parsePlan(row),
+      can_sell:
+        !!dateText(row.entry_date) &&
+        getMarketClock().date > (dateText(row.entry_date) || ''),
+      unrealized_pct:
+        entry && current
+          ? round((current / entry - 1) * 100, 3)
+          : null
+    };
+  });
 
   return {
     generatedAt: new Date().toISOString(),
