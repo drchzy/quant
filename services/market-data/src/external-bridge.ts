@@ -55,10 +55,10 @@ async function upsertStock(row: Row): Promise<void> {
   const market = /^(5|6|9)/.test(stockCode) ? 1 : 0;
   const marketName = /^(4|8|92)/.test(stockCode) ? '北京' : market === 1 ? '上海' : '深圳';
   await run(
-    \`INSERT INTO stock (code, name, market, market_name, updated_at)
+    `INSERT INTO stock (code, name, market, market_name, updated_at)
      VALUES (?, ?, ?, ?, now()) ON CONFLICT (code) DO UPDATE SET
        name = CASE WHEN excluded.name = excluded.code THEN stock.name ELSE excluded.name END,
-       market = excluded.market, market_name = excluded.market_name, updated_at = now()\`,
+       market = excluded.market, market_name = excluded.market_name, updated_at = now()`,
     [stockCode, name, market, marketName]
   );
 }
@@ -67,7 +67,7 @@ async function saveSnapshot(row: Row) {
   const stockCode = code(row);
   const tradeDate = date(row, 'tradeDate');
   await run(
-    \`INSERT INTO daily_price
+    `INSERT INTO daily_price
       (code, trade_date, open, close, high, low, pre_close, volume, amount,
        pct, change, amplitude, turnover, pe, pb, volume_ratio, total_market_cap,
        float_market_cap, source, updated_at)
@@ -89,7 +89,7 @@ async function saveSnapshot(row: Row) {
        volume_ratio = COALESCE(excluded.volume_ratio, daily_price.volume_ratio),
        total_market_cap = COALESCE(excluded.total_market_cap, daily_price.total_market_cap),
        float_market_cap = COALESCE(excluded.float_market_cap, daily_price.float_market_cap),
-       source = excluded.source, updated_at = now()\`,
+       source = excluded.source, updated_at = now()`,
     [stockCode, tradeDate, numeric(row, 'open'), numeric(row, 'close', true),
      numeric(row, 'high'), numeric(row, 'low'), numeric(row, 'preClose'),
      numeric(row, 'volume'), numeric(row, 'amount'), numeric(row, 'pct'),
@@ -107,7 +107,7 @@ async function saveMinute(row: Row) {
   const period = numeric(row, 'period', true);
   if (![1, 5, 15, 30, 60].includes(period!)) throw new Error('period 必须是 1/5/15/30/60');
   await run(
-    \`INSERT INTO minute_price
+    `INSERT INTO minute_price
      (code, period, trade_time, open, close, high, low, volume, amount, pct,
       change, turnover, source, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'external_eastmoney', now())
@@ -115,7 +115,7 @@ async function saveMinute(row: Row) {
       open = excluded.open, close = excluded.close, high = excluded.high,
       low = excluded.low, volume = excluded.volume, amount = excluded.amount,
       pct = excluded.pct, change = excluded.change, turnover = excluded.turnover,
-      source = excluded.source, updated_at = now()\`,
+      source = excluded.source, updated_at = now()`,
     [code(row), period, datetime(row),
      numeric(row, 'open'), numeric(row, 'close', true),
      numeric(row, 'high'), numeric(row, 'low'),
@@ -126,13 +126,13 @@ async function saveMinute(row: Row) {
 async function saveIntraday(row: Row) {
   await upsertStock(row);
   await run(
-    \`INSERT INTO intraday_trend
+    `INSERT INTO intraday_trend
       (code, trade_time, price, avg_price, volume, amount, pct, source, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'external_eastmoney', now())
      ON CONFLICT (code, trade_time) DO UPDATE SET
        price = excluded.price, avg_price = excluded.avg_price,
        volume = excluded.volume, amount = excluded.amount, pct = excluded.pct,
-       source = excluded.source, updated_at = now()\`,
+       source = excluded.source, updated_at = now()`,
     [code(row), datetime(row), numeric(row, 'price', true),
      numeric(row, 'avgPrice'), numeric(row, 'volume'),
      numeric(row, 'amount'), numeric(row, 'pct')]
@@ -144,13 +144,13 @@ async function saveSector(row: Row) {
   const code = field(row, 'code', true);
   if (!/^[A-Za-z0-9]{2,20}$/.test(code)) throw new Error('板块代码不合法');
   await run(
-    \`INSERT INTO sector
+    `INSERT INTO sector
      (type, code, name, price, pct, main_inflow, up_count, down_count, lead_stock, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
      ON CONFLICT (type, code) DO UPDATE SET
        name = excluded.name, price = excluded.price, pct = excluded.pct,
        main_inflow = excluded.main_inflow, up_count = excluded.up_count,
-       down_count = excluded.down_count, lead_stock = excluded.lead_stock, updated_at = now()\`,
+       down_count = excluded.down_count, lead_stock = excluded.lead_stock, updated_at = now()`,
     [type, code, field(row, 'name', true), numeric(row, 'price'),
      numeric(row, 'pct'), numeric(row, 'mainInflow'),
      numeric(row, 'upCount'), numeric(row, 'downCount'), field(row, 'leadStock')]
@@ -159,14 +159,14 @@ async function saveSector(row: Row) {
 async function saveIndex(row: Row) {
   const indexCode = code(row);
   await run(
-    \`INSERT INTO market_index
+    `INSERT INTO market_index
      (code, name, price, open, high, low, pre_close, pct, change, volume, amount, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
      ON CONFLICT (code) DO UPDATE SET
       name = excluded.name, price = excluded.price, open = excluded.open,
       high = excluded.high, low = excluded.low, pre_close = excluded.pre_close,
       pct = excluded.pct, change = excluded.change, volume = excluded.volume,
-      amount = excluded.amount, updated_at = now()\`,
+      amount = excluded.amount, updated_at = now()`,
     [indexCode, field(row, 'name', true), numeric(row, 'price', true),
      numeric(row, 'open'), numeric(row, 'high'), numeric(row, 'low'),
      numeric(row, 'preClose'), numeric(row, 'pct'),
@@ -203,7 +203,7 @@ export async function getBridgeCounts() {
   const tables = ['stock', 'daily_price', 'minute_price', 'intraday_trend', 'sector', 'market_index'];
   const counts: Record<string, number> = {};
   for (const table of tables) {
-    const rows = await all<{ total: number }>(\`SELECT COUNT(*)::INTEGER AS total FROM \${table}\`);
+    const rows = await all<{ total: number }>(`SELECT COUNT(*)::INTEGER AS total FROM ${table}`);
     counts[table] = Number(rows[0]?.total || 0);
   }
   return counts;
