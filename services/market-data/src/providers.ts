@@ -620,6 +620,144 @@ export async function fetchTencentDaily(
     : new Error(String(lastError));
 }
 
+
+export async function fetchTencentMinute(
+  code: string,
+  period: 1 | 5 | 15 | 30 | 60,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  const symbol = tencentSymbol(code);
+  const params = new URLSearchParams({
+    param:
+      symbol +
+      ',m' +
+      String(period) +
+      ',,' +
+      String(Math.min(Math.max(limit, 1), 1000))
+  });
+
+  const endpoints = [
+    'https://ifzq.gtimg.cn/appstock/app/kline/mkline',
+    'https://web.ifzq.gtimg.cn/appstock/app/kline/mkline'
+  ];
+
+  let lastError: unknown;
+
+  for (const endpoint of endpoints) {
+    try {
+      const json = await withSourceLimit(
+        'tencent',
+        signal,
+        () =>
+          fetchJson(
+            endpoint + '?' + params.toString(),
+            {
+              headers: {
+                ...browserHeaders,
+                Referer: 'https://gu.qq.com/'
+              }
+            },
+            signal
+          )
+      );
+
+      const raw =
+        json?.data?.[symbol]?.['m' + String(period)] || [];
+
+      if (!Array.isArray(raw) || raw.length === 0) {
+        throw new Error('腾讯分钟K返回为空');
+      }
+
+      return raw.map((item: any[]) => {
+        const time = String(item[0] || '');
+        const date =
+          /^\d{12}$/.test(time)
+            ? time.slice(0, 4) +
+              '-' +
+              time.slice(4, 6) +
+              '-' +
+              time.slice(6, 8) +
+              ' ' +
+              time.slice(8, 10) +
+              ':' +
+              time.slice(10, 12)
+            : time;
+
+        return {
+          date,
+          open: number(item[1]),
+          close: number(item[2]),
+          high: number(item[3]),
+          low: number(item[4]),
+          volume: number(item[5]),
+          amount: null,
+          amplitude: null,
+          pct: null,
+          change: null,
+          turnover: null
+        };
+      });
+    } catch (error) {
+      lastError = error;
+      throwIfAborted(signal);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError));
+}
+
+export async function fetchEastmoneyMinute(
+  code: string,
+  period: 1 | 5 | 15 | 30 | 60,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  const secid = String(marketByCode(code)) + '.' + code;
+  const params = new URLSearchParams({
+    secid,
+    klt: String(period),
+    fqt: '0',
+    lmt: String(limit),
+    end: '20500101',
+    fields1: 'f1,f2,f3,f4,f5,f6',
+    fields2:
+      'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
+    _: String(Date.now())
+  });
+
+  const json = await eastmoneyJson(
+    '/api/qt/stock/kline/get',
+    params,
+    signal,
+    true
+  );
+
+  const rows = json?.data?.klines;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('东财分钟K返回为空');
+  }
+
+  return rows.map((line: string) => {
+    const row = String(line).split(',');
+    return {
+      date: row[0],
+      open: number(row[1]),
+      close: number(row[2]),
+      high: number(row[3]),
+      low: number(row[4]),
+      volume: number(row[5]),
+      amount: nullable(row[6]),
+      amplitude: nullable(row[7]),
+      pct: nullable(row[8]),
+      change: nullable(row[9]),
+      turnover: nullable(row[10])
+    };
+  });
+}
+
 export async function fetchEastmoneyDaily(
   code: string,
   limit: number,
@@ -959,28 +1097,149 @@ export async function fetchEastmoneySectors(
 
 export async function testDataSource(
   source: DataSourceId,
+  capability?: DataCapability,
   signal?: AbortSignal
-): Promise<{ capability: DataCapability; count: number; sample: unknown }> {
+): Promise<{
+  capability: DataCapability;
+  count: number;
+  sample: unknown;
+}> {
+  const definition = dataSourceDefinitions.find(
+    (item) => item.id === source
+  );
+
+  if (!definition) {
+    throw new Error('未知数据源：' + source);
+  }
+
+  const target =
+    capability && definition.capabilities.includes(capability)
+      ? capability
+      : definition.capabilities[0];
+
   switch (source) {
     case 'sina': {
       const rows = await fetchSinaSnapshot(signal, true);
-      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+      return {
+        capability: 'snapshot',
+        count: rows.length,
+        sample: rows[0] || null
+      };
     }
+
     case 'eastmoney_datacenter': {
-      const rows = await fetchEastmoneyDataCenterSnapshot(signal, true);
-      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+      const rows = await fetchEastmoneyDataCenterSnapshot(
+        signal,
+        true
+      );
+      return {
+        capability: 'snapshot',
+        count: rows.length,
+        sample: rows[0] || null
+      };
     }
+
     case 'eastmoney_push2': {
-      const rows = await fetchEastmoneyPush2Snapshot(signal, true);
-      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+      if (target === 'daily') {
+        const rows = await fetchEastmoneyDaily(
+          '600000',
+          5,
+          signal
+        );
+        return {
+          capability: 'daily',
+          count: rows.length,
+          sample: rows.at(-1) || null
+        };
+      }
+
+      if (target === 'minute') {
+        const rows = await fetchEastmoneyMinute(
+          '600000',
+          1,
+          10,
+          signal
+        );
+        return {
+          capability: 'minute',
+          count: rows.length,
+          sample: rows.at(-1) || null
+        };
+      }
+
+      if (target === 'sector') {
+        const rows = await fetchEastmoneySectors(
+          'industry',
+          signal
+        );
+        return {
+          capability: 'sector',
+          count: rows.length,
+          sample: rows[0] || null
+        };
+      }
+
+      const rows = await fetchEastmoneyPush2Snapshot(
+        signal,
+        true
+      );
+      return {
+        capability: 'snapshot',
+        count: rows.length,
+        sample: rows[0] || null
+      };
     }
+
     case 'tencent': {
-      const rows = await fetchTencentDaily('600000', 5, signal);
-      return { capability: 'daily', count: rows.length, sample: rows.at(-1) || null };
+      if (target === 'minute') {
+        const rows = await fetchTencentMinute(
+          '600000',
+          1,
+          10,
+          signal
+        );
+        return {
+          capability: 'minute',
+          count: rows.length,
+          sample: rows.at(-1) || null
+        };
+      }
+
+      const rows = await fetchTencentDaily(
+        '600000',
+        5,
+        signal
+      );
+      return {
+        capability: 'daily',
+        count: rows.length,
+        sample: rows.at(-1) || null
+      };
     }
+
     case 'tushare': {
-      const rows = await fetchTushareSnapshot(signal, true);
-      return { capability: 'snapshot', count: rows.length, sample: rows[0] || null };
+      if (target === 'daily') {
+        const rows = await fetchTushareDaily(
+          '600000',
+          5,
+          signal
+        );
+        return {
+          capability: 'daily',
+          count: rows.length,
+          sample: rows.at(-1) || null
+        };
+      }
+
+      const rows = await fetchTushareSnapshot(
+        signal,
+        true
+      );
+      return {
+        capability: 'snapshot',
+        count: rows.length,
+        sample: rows[0] || null
+      };
     }
   }
 }
@@ -1020,6 +1279,34 @@ export async function fetchDailyBySource(
       throw new Error(`${source} 不支持历史日K`);
   }
 }
+
+export async function fetchMinuteBySource(
+  source: DataSourceId,
+  code: string,
+  period: 1 | 5 | 15 | 30 | 60,
+  limit: number,
+  signal?: AbortSignal
+): Promise<DailyBar[]> {
+  switch (source) {
+    case 'tencent':
+      return fetchTencentMinute(
+        code,
+        period,
+        limit,
+        signal
+      );
+    case 'eastmoney_push2':
+      return fetchEastmoneyMinute(
+        code,
+        period,
+        limit,
+        signal
+      );
+    default:
+      throw new Error(source + ' 不支持分钟K');
+  }
+}
+
 
 export async function fetchSectorsBySource(
   source: DataSourceId,
