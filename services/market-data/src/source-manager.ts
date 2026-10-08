@@ -267,6 +267,18 @@ export async function testSource(
   }
 
   if (
+    capability &&
+    !definition.capabilities.includes(capability)
+  ) {
+    throw new Error(
+      definition.name + ' 不支持 ' + capability
+    );
+  }
+
+  const targetCapability =
+    capability || definition.capabilities[0];
+
+  if (
     definition.needsToken &&
     !String(process.env.TUSHARE_TOKEN || '').trim()
   ) {
@@ -279,18 +291,6 @@ export async function testSource(
     });
     throw new Error(message);
   }
-
-  if (
-    capability &&
-    !definition.capabilities.includes(capability)
-  ) {
-    throw new Error(
-      definition.name + ' 不支持 ' + capability
-    );
-  }
-
-  const targetCapability =
-    capability || definition.capabilities[0];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
@@ -330,7 +330,7 @@ export async function testSource(
 
     await recordSourceResult(source, {
       status: controller.signal.aborted ? 'cancelled' : 'failed',
-      capability: definition.capabilities[0],
+      capability: targetCapability,
       message,
       latencyMs,
       tested: true
