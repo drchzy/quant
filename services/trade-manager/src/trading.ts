@@ -650,8 +650,8 @@ export async function confirmBuy(
 
   if (!row) throw new Error('交易计划不存在');
   if (row.entry_price) throw new Error('该计划已经确认买入');
-  if (['closed', 'expired', 'invalid'].includes(row.state)) {
-    throw new Error('当前计划状态不能确认买入');
+  if (row.state !== 'buy_ready') {
+    throw new Error('只有进入计划买入区后才能确认买入');
   }
 
   const livePrice = nullableNumber(row.current_price);
