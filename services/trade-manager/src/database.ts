@@ -50,6 +50,7 @@ export async function initDatabase(): Promise<void> {
       state VARCHAR NOT NULL,
       signal VARCHAR NOT NULL,
       signal_reason VARCHAR,
+      pending_signal VARCHAR,
 
       current_price DOUBLE,
       day_high DOUBLE,
