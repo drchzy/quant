@@ -859,7 +859,14 @@ export async function syncHistory(
 }
 
 export async function syncIndexes(signal?: AbortSignal): Promise<void> {
-  await syncMarketIndexes(signal);
+  try {
+    await syncMarketIndexes(signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // 指数是补充数据，不能因某数据源受限令已完成的全市场同步失败。
+    console.warn('指数同步暂不可用，保留 DuckDB 中的旧指数记录：',
+      error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
