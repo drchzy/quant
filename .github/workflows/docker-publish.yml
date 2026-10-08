@@ -38,6 +38,7 @@ jobs:
         with:
           context: .
           file: services/market-data/Dockerfile
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.market_meta.outputs.tags }}
           labels: ${{ steps.market_meta.outputs.labels }}
@@ -57,6 +58,7 @@ jobs:
         with:
           context: .
           file: services/stock-select/Dockerfile
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.select_meta.outputs.tags }}
           labels: ${{ steps.select_meta.outputs.labels }}
@@ -76,6 +78,7 @@ jobs:
         with:
           context: .
           file: services/trade-manager/Dockerfile
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.trade_meta.outputs.tags }}
           labels: ${{ steps.trade_meta.outputs.labels }}
@@ -95,6 +98,7 @@ jobs:
         with:
           context: .
           file: apps/web/Dockerfile
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.web_meta.outputs.tags }}
           labels: ${{ steps.web_meta.outputs.labels }}
