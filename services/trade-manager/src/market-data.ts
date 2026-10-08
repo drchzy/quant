@@ -28,16 +28,35 @@ export async function getLiveStock(code: string): Promise<LiveStock> {
     ? intradayResult.data
     : [];
   const latest = intraday.at(-1);
+  const intradayPrices = intraday
+    .map((item: any) => Number(item.price || 0))
+    .filter((value: number) => value > 0);
+
+  // 东财 quote 被风控时，market-data 会把 quote 降级为 DuckDB。
+  // 如果分时已经从腾讯备用源取得当天数据，执行逻辑优先使用分时最新价。
+  const livePrice =
+    Number(latest?.price || 0) ||
+    Number(quote.price || 0);
 
   return {
     code,
     name: String(quote.name || code),
-    price: Number(quote.price || 0),
-    high: Number(quote.high || 0),
-    low: Number(quote.low || 0),
-    open: Number(quote.open || 0),
+    price: livePrice,
+    high:
+      intradayPrices.length > 0
+        ? Math.max(...intradayPrices)
+        : Number(quote.high || 0),
+    low:
+      intradayPrices.length > 0
+        ? Math.min(...intradayPrices)
+        : Number(quote.low || 0),
+    open:
+      intradayPrices.length > 0
+        ? intradayPrices[0]
+        : Number(quote.open || 0),
     preClose: Number(quote.preClose || 0),
-    pct: Number(quote.pct || 0),
+    pct:
+      Number(latest?.pct ?? quote.pct ?? 0),
     avgPrice:
       latest?.avgPrice === undefined
         ? null
