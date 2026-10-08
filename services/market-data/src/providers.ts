@@ -171,7 +171,6 @@ async function withSourceLimit<T>(
   sourceQueues.set(source, current);
 
   await previous;
-  throwIfAborted(signal);
 
   const last = sourceLastStart.get(source) || 0;
   const jitter =
@@ -184,6 +183,7 @@ async function withSourceLimit<T>(
   );
 
   try {
+    throwIfAborted(signal);
     await waitWithAbort(wait, signal);
     sourceLastStart.set(source, Date.now());
     return await fn();
