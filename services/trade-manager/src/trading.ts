@@ -606,7 +606,15 @@ async function evaluatePlan(row: any, live: LiveStock) {
 let refreshTask: Promise<any> | null = null;
 
 async function refreshTradingCore() {
-  await syncLatestPlans();
+  let planSyncError: string | null = null;
+
+  try {
+    await syncLatestPlans();
+  } catch (error) {
+    planSyncError =
+      error instanceof Error ? error.message : String(error);
+    console.error('同步最新交易计划失败，继续监控已有持仓', error);
+  }
 
   const rows = await all<any>(
     `SELECT *
@@ -651,7 +659,8 @@ async function refreshTradingCore() {
     date: today,
     total: rows.length,
     updated,
-    stale
+    stale,
+    planSyncError
   };
 }
 
@@ -1055,7 +1064,14 @@ export async function getPlan(id: string) {
 }
 
 export async function getTradingOverview() {
-  await syncLatestPlans();
+  let planSyncError: string | null = null;
+
+  try {
+    await syncLatestPlans();
+  } catch (error) {
+    planSyncError =
+      error instanceof Error ? error.message : String(error);
+  }
 
   const rows = await all<any>(
     `SELECT *
@@ -1094,6 +1110,7 @@ export async function getTradingOverview() {
 
   return {
     generatedAt: new Date().toISOString(),
+    planSyncError,
     counts: {
       total: data.length,
       buyReady: data.filter((row) => row.state === 'buy_ready').length,
