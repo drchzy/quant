@@ -7,6 +7,6 @@ data/
 .idea/
 .vscode/
 
-runtime/config/.env
-runtime/data/*
-!runtime/data/.gitkeep
+web/config/.env
+web/data/*
+!web/data/.gitkeep
