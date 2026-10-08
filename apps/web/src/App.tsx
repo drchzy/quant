@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiGet, apiPost, formatMoney, formatPct } from './api';
 import { DailyChart, MinuteChart } from './charts';
 
-type Page = 'market' | 'stock' | 'sector' | 'select' | 'sync';
+type Page = 'market' | 'stock' | 'sector' | 'select' | 'review' | 'sync';
 
 function Change({ value }: { value: unknown }) {
   const number = Number(value || 0);
@@ -602,6 +602,272 @@ function SelectPage() {
   );
 }
 
+
+function ReviewPage() {
+  const [summary, setSummary] = useState<any>(null);
+  const [rows, setRows] = useState<any[]>([]);
+  const [backtest, setBacktest] = useState<any>(null);
+  const [days, setDays] = useState(60);
+  const [topCount, setTopCount] = useState(3);
+  const [error, setError] = useState('');
+  const [reviewing, setReviewing] = useState(false);
+  const [startingBacktest, setStartingBacktest] = useState(false);
+
+  const load = async () => {
+    setError('');
+    try {
+      const [a, b, c] = await Promise.all([
+        apiGet<any>('/select/review/summary?mainOnly=true'),
+        apiGet<any>('/select/review/latest?limit=50'),
+        apiGet<any>('/select/backtests/latest')
+      ]);
+      setSummary(a);
+      setRows(b.data || []);
+      setBacktest(c);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  useEffect(() => {
+    if (backtest?.run?.status !== 'running') return;
+
+    const timer = window.setInterval(() => {
+      void load();
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [backtest?.run?.status]);
+
+  const runReview = async () => {
+    setReviewing(true);
+    try {
+      await apiPost('/select/review/run');
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  const runBacktest = async () => {
+    setStartingBacktest(true);
+    try {
+      await apiPost('/select/backtest', {
+        tradeDays: days,
+        topCount
+      });
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setStartingBacktest(false);
+    }
+  };
+
+  const defaultResult = backtest?.run?.default;
+  const bestResult = backtest?.run?.best;
+
+  return (
+    <>
+      <div className="page-title">
+        <div>
+          <h2>策略复盘</h2>
+          <p>记录候选次日表现，用历史数据验证胜率、盈亏比和止盈止损参数</p>
+        </div>
+        <button disabled={reviewing} onClick={() => void runReview()}>
+          {reviewing ? '正在复盘…' : '更新复盘'}
+        </button>
+      </div>
+
+      {error && <div className="error">{error}</div>}
+
+      {summary && (
+        <div className="stat-grid review-stat-grid">
+          <div className="card"><b>{summary.completed}</b><span>完成交易样本</span></div>
+          <div className="card"><b>{formatPct(summary.entryRate)}</b><span>计划成交率</span></div>
+          <div className="card"><b>{formatPct(summary.winRate)}</b><span>胜率</span></div>
+          <div className="card"><b>{formatPct(summary.avgReturn)}</b><span>平均收益</span></div>
+          <div className="card"><b>{summary.profitLossRatio ?? '-'}</b><span>盈亏比</span></div>
+          <div className="card"><b>{formatPct(summary.maxDrawdown)}</b><span>样本最大回撤</span></div>
+        </div>
+      )}
+
+      <section className="panel">
+        <div className="panel-title-row">
+          <div>
+            <h3>参数回测</h3>
+            <p>基于历史候选比较退出纪律。建议参数只展示，不会自动覆盖当前策略。</p>
+          </div>
+          <div className="backtest-actions">
+            <label>
+              交易日
+              <input type="number" min={20} max={180} value={days}
+                onChange={(event) => setDays(Number(event.target.value))} />
+            </label>
+            <label>
+              每日前几名
+              <input type="number" min={1} max={10} value={topCount}
+                onChange={(event) => setTopCount(Number(event.target.value))} />
+            </label>
+            <button
+              disabled={startingBacktest || backtest?.run?.status === 'running'}
+              onClick={() => void runBacktest()}
+            >
+              {backtest?.run?.status === 'running'
+                ? '回测运行中…'
+                : startingBacktest ? '正在启动…' : '运行回测'}
+            </button>
+          </div>
+        </div>
+
+        {backtest?.run && (
+          <div className="notice">
+            状态：{backtest.run.status}；{backtest.run.message || ''}
+            {backtest.run.start_date && (
+              <span>
+                ；区间 {String(backtest.run.start_date).slice(0, 10)}
+                {' ~ '}
+                {String(backtest.run.end_date).slice(0, 10)}
+              </span>
+            )}
+          </div>
+        )}
+
+        {defaultResult && bestResult && (
+          <div className="two-column">
+            <div className="compare-card">
+              <h4>当前参数</h4>
+              <div className="compare-grid">
+                <span>止损 <b>{defaultResult.params.stopPct}%</b></span>
+                <span>目标 <b>{defaultResult.params.targetPct}%</b></span>
+                <span>移动启动 <b>{defaultResult.params.trailingStartPct}%</b></span>
+                <span>回撤退出 <b>{defaultResult.params.trailingDrawdownPct}%</b></span>
+                <span>持有 <b>{defaultResult.params.holdDays}天</b></span>
+                <span>胜率 <b>{formatPct(defaultResult.winRate)}</b></span>
+                <span>均收益 <b>{formatPct(defaultResult.avgReturn)}</b></span>
+                <span>盈亏比 <b>{defaultResult.profitLossRatio ?? '-'}</b></span>
+              </div>
+            </div>
+
+            <div className="compare-card best">
+              <h4>历史样本最优参数</h4>
+              <div className="compare-grid">
+                <span>止损 <b>{bestResult.params.stopPct}%</b></span>
+                <span>目标 <b>{bestResult.params.targetPct}%</b></span>
+                <span>移动启动 <b>{bestResult.params.trailingStartPct}%</b></span>
+                <span>回撤退出 <b>{bestResult.params.trailingDrawdownPct}%</b></span>
+                <span>持有 <b>{bestResult.params.holdDays}天</b></span>
+                <span>胜率 <b>{formatPct(bestResult.winRate)}</b></span>
+                <span>均收益 <b>{formatPct(bestResult.avgReturn)}</b></span>
+                <span>盈亏比 <b>{bestResult.profitLossRatio ?? '-'}</b></span>
+              </div>
+              <small>仅为历史样本建议，不自动修改线上参数。</small>
+            </div>
+          </div>
+        )}
+
+        {(backtest?.parameters || []).length > 0 && (
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th><th>止损</th><th>目标</th><th>移动启动</th>
+                <th>回撤退出</th><th>持有</th><th>样本</th><th>胜率</th>
+                <th>平均收益</th><th>盈亏比</th><th>最大回撤</th>
+              </tr>
+            </thead>
+            <tbody>
+              {backtest.parameters.slice(0, 10).map((row: any) => (
+                <tr key={row.rank}>
+                  <td>{row.rank}</td>
+                  <td>{row.stop_pct}%</td>
+                  <td>{row.target_pct}%</td>
+                  <td>{row.trailing_start_pct}%</td>
+                  <td>{row.trailing_drawdown_pct}%</td>
+                  <td>{row.hold_days}天</td>
+                  <td>{row.trades}</td>
+                  <td>{formatPct(row.win_rate)}</td>
+                  <td>{formatPct(row.avg_return)}</td>
+                  <td>{row.profit_loss_ratio ?? '-'}</td>
+                  <td>{formatPct(row.max_drawdown)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {summary?.bySetup?.length > 0 && (
+        <section className="panel">
+          <h3>形态表现</h3>
+          <table>
+            <thead>
+              <tr><th>形态</th><th>完成样本</th><th>胜率</th><th>平均收益</th></tr>
+            </thead>
+            <tbody>
+              {summary.bySetup.map((row: any) => (
+                <tr key={row.setup}>
+                  <td>{row.setup}</td>
+                  <td>{row.trades}</td>
+                  <td>{formatPct(row.winRate)}</td>
+                  <td>{formatPct(row.avgReturn)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      <section className="panel">
+        <h3>最近候选复盘</h3>
+        {rows.length === 0 ? (
+          <div className="notice">
+            暂无可复盘数据。至少需要完成一次选股，并等待下一个交易日行情同步。
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>选股日</th><th>排名</th><th>代码</th><th>名称</th>
+                <th>形态</th><th>状态</th><th>次日收盘</th><th>次日涨跌</th>
+                <th>实际收益</th><th>最大浮盈</th><th>退出原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row: any) => (
+                <tr key={row.run_id + '-' + row.code}>
+                  <td>{String(row.select_date).slice(0, 10)}</td>
+                  <td>{row.rank}</td>
+                  <td>{row.code}</td>
+                  <td>{row.name}</td>
+                  <td>{row.setup}</td>
+                  <td>{row.status}</td>
+                  <td>{row.next_close ?? '-'}</td>
+                  <td>{formatPct(row.next_close_return_pct)}</td>
+                  <td>{row.return_pct == null ? '-' : formatPct(row.return_pct)}</td>
+                  <td>{row.max_profit_pct == null ? '-' : formatPct(row.max_profit_pct)}</td>
+                  <td>{row.exit_reason || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
 function SyncPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [days, setDays] = useState(120);
@@ -725,6 +991,7 @@ export default function App() {
     ['stock', '股票查询'],
     ['sector', '板块对比'],
     ['select', '每日选股'],
+    ['review', '策略复盘'],
     ['sync', '数据同步']
   ];
 
@@ -754,6 +1021,7 @@ export default function App() {
         {page === 'stock' && <StockPage />}
         {page === 'sector' && <SectorPage />}
         {page === 'select' && <SelectPage />}
+        {page === 'review' && <ReviewPage />}
         {page === 'sync' && <SyncPage />}
       </main>
     </div>
