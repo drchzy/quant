@@ -1309,6 +1309,7 @@ function SyncPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [testing, setTesting] = useState('');
+  const [testResults, setTestResults] = useState<Record<string, any>>({});
   const [stopping, setStopping] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -1414,29 +1415,51 @@ function SyncPage() {
     }
   };
 
-  const testOneSource = async (id: string) => {
-    setTesting(id);
+  const testOneSource = async (
+    id: string,
+    capability: string
+  ) => {
+    const key = id + ':' + capability;
+    setTesting(key);
     setError('');
     setMessage('');
 
     try {
       const result = await apiPost<any>('/data-sources/test', {
-        source: id
+        source: id,
+        capability
       });
+
+      setTestResults((current) => ({
+        ...current,
+        [key]: {
+          success: true,
+          ...result
+        }
+      }));
 
       setMessage(
         result.sourceName +
-          ' 测试成功：' +
-          result.message +
-          '，延迟 ' +
+          ' / ' +
+          (capabilityText[result.capability] || result.capability) +
+          ' 测试成功，延迟 ' +
           result.latencyMs +
           'ms'
       );
       await loadSources();
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : String(error)
-      );
+      const message =
+        error instanceof Error ? error.message : String(error);
+
+      setTestResults((current) => ({
+        ...current,
+        [key]: {
+          success: false,
+          message
+        }
+      }));
+
+      setError(message);
       await loadSources();
     } finally {
       setTesting('');
@@ -1620,15 +1643,76 @@ function SyncPage() {
                 )}
               </div>
 
-              <button
-                className="source-test-button"
-                disabled={
-                  !source.available || testing === source.id
-                }
-                onClick={() => void testOneSource(source.id)}
-              >
-                {testing === source.id ? '测试中…' : '请求测试'}
-              </button>
+              <div className="source-test-area">
+                <div className="source-test-actions">
+                  {(source.capabilities || []).map(
+                    (capability: string) => {
+                      const key = source.id + ':' + capability;
+                      return (
+                        <button
+                          className="source-test-button"
+                          key={capability}
+                          disabled={
+                            !source.available || testing === key
+                          }
+                          onClick={() =>
+                            void testOneSource(
+                              source.id,
+                              capability
+                            )
+                          }
+                        >
+                          {testing === key
+                            ? '测试中…'
+                            : '测' +
+                              (capabilityText[capability] || capability)}
+                        </button>
+                      );
+                    }
+                  )}
+                </div>
+
+                {(source.capabilities || []).map(
+                  (capability: string) => {
+                    const key = source.id + ':' + capability;
+                    const result = testResults[key];
+                    if (!result) return null;
+
+                    return (
+                      <div
+                        className={
+                          'source-test-result ' +
+                          (result.success
+                            ? 'test-success'
+                            : 'test-failed')
+                        }
+                        key={key}
+                      >
+                        <b>
+                          {capabilityText[capability] || capability}
+                        </b>
+                        <span>
+                          {result.success
+                            ? String(result.latencyMs) +
+                              'ms / ' +
+                              String(result.count) +
+                              '条'
+                            : result.message}
+                        </span>
+                        {result.success && (
+                          <pre>
+                            {JSON.stringify(
+                              result.sample,
+                              null,
+                              2
+                            )}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  }
+                )}
+              </div>
             </div>
           ))}
         </div>
