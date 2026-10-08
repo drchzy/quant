@@ -1324,7 +1324,8 @@ function SyncPage() {
     daily: '日K',
     minute: '分钟K',
     sector: '板块',
-    index: '指数'
+    index: '指数',
+    quote: '实时报价'
   };
 
   const sourceName = (id: string) =>
