@@ -1005,3 +1005,9 @@ input {
   background: #fef2f2;
   color: #991b1b;
 }
+
+
+.source-job-skipped {
+  background: #f8fafc;
+  color: #94a3b8;
+}
