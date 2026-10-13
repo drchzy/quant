@@ -1,8 +1,13 @@
 import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import {
-  gddMarketCode, parseGddKline, parseGddTrend, fetchGddDaily
+  gddMarketCode, parseGddKline, parseGddTrend, fetchGddDaily,
+  getGddDeviceId, invalidateGddGateway
 } from '../dist/gdd.js';
+import { config } from '../dist/config.js';
 import { dataSourceDefinitions } from '../dist/providers.js';
 
 const table = [
@@ -64,18 +69,65 @@ test('GDD parses verified trend envelope and preserves previous close', () => {
   assert.equal(numericRows[1].datetime, '2026-10-13 15:00:00');
 });
 
-test('GDD discovers type=36 gateway, then sends reqtype=150 with session empty', async () => {
-  const original = globalThis.fetch;
-  process.env.GDD_SESSION_CODE = 'test-only-session';
+test('GDD automatically creates a stable device ID on the persistent data volume', () => {
+  const previous = config.databasePath;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gdd-device-test-'));
+  const originalDevice = process.env.GDD_DEVICE;
+  try {
+    delete process.env.GDD_DEVICE;
+    config.databasePath = path.join(dir, 'market.duckdb');
+    const first = getGddDeviceId();
+    const second = getGddDeviceId();
+    assert.equal(first, second);
+    assert.match(first, /^[a-f0-9-]{36}-dz_astock_gdd$/);
+    assert.equal(fs.readFileSync(path.join(dir, '.gdd-device-id'), 'utf8').trim(), first);
+  } finally {
+    config.databasePath = previous;
+    if (originalDevice === undefined) delete process.env.GDD_DEVICE;
+    else process.env.GDD_DEVICE = originalDevice;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GDD rejects missing credentials without ever trying the old static gateway', async () => {
+  invalidateGddGateway();
+  const original = [process.env.GDD_ACCOUNT, process.env.GDD_PASSWORD, process.env.GDD_GATEWAY_URL];
+  process.env.GDD_ACCOUNT = '';
+  process.env.GDD_PASSWORD = '';
   process.env.GDD_GATEWAY_URL = 'http://127.0.0.1:19920/';
+  try {
+    await assert.rejects(fetchGddDaily('300505', 2), /未配置账号密码/);
+  } finally {
+    ['GDD_ACCOUNT', 'GDD_PASSWORD', 'GDD_GATEWAY_URL'].forEach((k,i) => {
+      if(original[i] === undefined) delete process.env[k]; else process.env[k] = original[i];
+    });
+    invalidateGddGateway();
+  }
+});
+
+test('GDD logs in with account/password, discovers type=36, and uses only the returned gateway', async () => {
+  invalidateGddGateway();
+  const originalFetch = globalThis.fetch;
+  const originals = Object.fromEntries(['GDD_ACCOUNT','GDD_PASSWORD','GDD_DEVICE','GDD_GATEWAY_URL','GDD_SESSION_CODE']
+    .map(k => [k, process.env[k]]));
+  Object.assign(process.env, {
+    GDD_ACCOUNT: 'mock-user', GDD_PASSWORD: 'mock-password',
+    GDD_DEVICE: 'mock-persisted-device-1234',
+    // Even if legacy hardcoded variables remain on the host, ignore them.
+    GDD_GATEWAY_URL: 'http://127.0.0.1:19920/',
+    GDD_SESSION_CODE: 'stale-test-token'
+  });
   const seen = [];
   globalThis.fetch = async (url, options) => {
     const payload = JSON.parse(options.body);
     seen.push({ url: String(url), payload, headers: options.headers });
-    if (String(url).includes('query_server_info')) {
+    if (String(url).endsWith('/customer/login')) {
+      return new Response(JSON.stringify({ code: 0, result: { sessionCode: 'new-test-session' } }), { status: 200 });
+    }
+    if (String(url).endsWith('/config/query_server_info')) {
       return new Response(JSON.stringify({ code: 0, result: { sers: [
         { serverType: 1, ip: '127.0.0.2', serverPort: 4000 },
-        { serverType: 36, ip: '8.129.13.151', serverPort: 19920 }
+        { serverType: 36, ip: '10.20.30.40', serverPort: 19921 }
       ] } }), { status: 200 });
     }
     return new Response(JSON.stringify({
@@ -85,15 +137,68 @@ test('GDD discovers type=36 gateway, then sends reqtype=150 with session empty',
   try {
     const rows = await fetchGddDaily('300505', 2);
     assert.equal(rows.length, 2);
-    assert.match(seen[0].url, /config\/query_server_info$/);
-    assert.equal(seen[0].headers.sessionCode, 'test-only-session');
-    assert.equal(seen[1].url, 'http://8.129.13.151:19920/');
-    assert.equal(seen[1].payload.data.market, 1008);
-    assert.equal(seen[1].payload.reqtype, 150);
-    assert.equal(seen[1].payload.session, '');
+    assert.equal(seen.length, 3);
+    assert.match(seen[0].url, /customer\/login$/);
+    assert.equal(seen[0].payload.account, 'mock-user');
+    assert.equal(seen[0].payload.password, 'mock-password');
+    assert.equal(seen[0].payload.device, 'mock-persisted-device-1234');
+    assert.match(seen[1].url, /config\/query_server_info$/);
+    assert.equal(seen[1].payload.sessionCode, 'new-test-session');
+    assert.equal(seen[1].headers.sessionCode, 'new-test-session');
+    assert.equal(seen[2].url, 'http://10.20.30.40:19921/');
+    assert.equal(seen[2].payload.data.market, 1008);
+    assert.equal(seen[2].payload.reqtype, 150);
+    assert.equal(seen[2].payload.session, '');
+    // The gateway is cached, so repeated requests do not re-login immediately.
+    await fetchGddDaily('300505', 2);
+    assert.equal(seen.filter(item => /customer\/login/.test(item.url)).length, 1);
   } finally {
-    globalThis.fetch = original;
-    delete process.env.GDD_SESSION_CODE;
-    delete process.env.GDD_GATEWAY_URL;
+    globalThis.fetch = originalFetch;
+    for (const [key,value] of Object.entries(originals)) {
+      if(value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    invalidateGddGateway();
+  }
+});
+
+test('GDD network failure triggers new login, fresh discovery and retry on the new IP', async () => {
+  invalidateGddGateway();
+  const originalFetch = globalThis.fetch;
+  const originals = Object.fromEntries(['GDD_ACCOUNT','GDD_PASSWORD','GDD_DEVICE']
+    .map(k => [k, process.env[k]]));
+  process.env.GDD_ACCOUNT = 'mock-user';
+  process.env.GDD_PASSWORD = 'mock-password';
+  process.env.GDD_DEVICE = 'mock-persisted-device-1234';
+  let logins = 0, quoteOld = 0, quoteNew = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/customer/login')) {
+      logins++;
+      return new Response(JSON.stringify({ code: 0, result: { sessionCode: 'new-session-' + logins } }), { status: 200 });
+    }
+    if (String(url).endsWith('/config/query_server_info')) {
+      const ip = logins === 1 ? '10.10.10.1' : '10.10.10.2';
+      return new Response(JSON.stringify({ code: 0, result: { sers: [
+        { serverType: 36, ip, serverPort: 19920 }
+      ] } }), { status: 200 });
+    }
+    if (String(url).includes('10.10.10.1')) {
+      quoteOld++;
+      throw new TypeError('fetch failed');
+    }
+    quoteNew++;
+    return new Response(JSON.stringify({ reqtype: 150, status: 0, data: { kline: table } }), { status: 200 });
+  };
+  try {
+    const rows = await fetchGddDaily('300505', 2);
+    assert.equal(rows.length, 2);
+    assert.equal(logins, 2);
+    assert.equal(quoteOld, 1);
+    assert.equal(quoteNew, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for(const [key,value] of Object.entries(originals)) {
+      if(value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    invalidateGddGateway();
   }
 });

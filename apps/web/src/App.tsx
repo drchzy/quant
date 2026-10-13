@@ -1630,7 +1630,7 @@ function SyncPage() {
 
               <div className="source-status">
                 {!source.available ? (
-                  <span className="status-bad">未配置 Token</span>
+                  <span className="status-bad">{source.id === 'gdd' ? '未配置GDD账号密码' : '未配置 Token'}</span>
                 ) : source.status?.lastStatus === 'success' ? (
                   <>
                     <span className="status-good">最近成功</span>

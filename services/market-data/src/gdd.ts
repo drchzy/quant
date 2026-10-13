@@ -1,13 +1,16 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { config } from './config.js';
 import type { DailyBar } from './providers.js';
 
 /**
- * GDD 行情协议：HTTP POST /，通过 reqtype 区分 K 线(150)、逐笔(151)、分时(152)。
- * 业务接口及会话令牌仅用于动态发现网关；行情信封本身 session=""。
- * IP 与密码可能经明文 HTTP 传输，不应写入日志或提交仓库。
+ * GDD 行情 HTTP 网关地址只能通过账号密码登录后查询 serverType=36 得到。
+ * 不接受固定网关作为静默兜底，避免 IP 变化后把请求发往旧服务器。
+ * sessionCode 只保留在本进程内存中，不写入磁盘或输出到日志。
  */
-const FALLBACK_GATEWAY = 'http://8.129.13.151:19920/';
 const BUSINESS_BASE = 'http://120.76.229.148:1080';
+const DISCOVERY_TTL_MS = 15 * 60_000;
 let cachedGateway: { url: string; until: number } | undefined;
 let discoveryPromise: Promise<string> | undefined;
 
@@ -23,7 +26,8 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(process.env.GDD_TIMEOUT_MS || 12000)));
+  const timeout = Number(process.env.GDD_TIMEOUT_MS || 12000);
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number.isFinite(timeout) ? timeout : 12000));
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -44,7 +48,7 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
 function appHeaders(session = ''): Record<string, string> {
   const headers: Record<string, string> = {
     channelType: 'android',
-    systemType: process.env.GDD_SYSTEM_TYPE || 'Android',
+    systemType: process.env.GDD_SYSTEM_TYPE || 'Android 15',
     versionNumber: process.env.GDD_VERSION_NUMBER || '1.20.0',
     orgCode: '0007'
   };
@@ -52,36 +56,64 @@ function appHeaders(session = ''): Record<string, string> {
   return headers;
 }
 
-async function discoverGateway(signal?: AbortSignal): Promise<string> {
-  let session = (process.env.GDD_SESSION_CODE || '').trim();
-  const account = (process.env.GDD_ACCOUNT || '').trim();
-  const password = process.env.GDD_PASSWORD || '';
-  const device = (process.env.GDD_DEVICE || '').trim();
-  if (!session && account && password && device) {
-    const pass = (process.env.GDD_PASSWORD_MODE || 'plain').toLowerCase() === 'md5'
-      ? createHash('md5').update(password).digest('hex')
-      : password;
-    const res = await postJson(
-      (process.env.GDD_BUSINESS_URL || BUSINESS_BASE).replace(/\/+$/, '') + '/investment-adviser/customer/login',
-      { account, password: pass, device, orgCode: '0007', loginType: 1, verificationCode: '' },
-      appHeaders(), signal
-    );
-    if (Number(res.code ?? res.ret) !== 0 || !res.result?.sessionCode) {
-      throw new Error('GDD 登录失败：' + String(res.message || res.msg || res.code || '缺少sessionCode').slice(0, 100));
-    }
-    session = String(res.result.sessionCode);
+/**
+ * 设备号在首次启用 GDD 时创建，持久化到 web/data/.gdd-device-id；
+ * 这样 Docker 容器替换后仍使用同一设备标识，无需用户配置 UUID。
+ */
+export function getGddDeviceId(): string {
+  const explicit = String(process.env.GDD_DEVICE || '').trim();
+  if (explicit) {
+    if (!/^[a-zA-Z0-9_-]{8,100}$/.test(explicit)) throw new Error('GDD_DEVICE 格式无效');
+    return explicit;
   }
-  if (!session) return gatewayUrl(process.env.GDD_GATEWAY_URL || FALLBACK_GATEWAY);
+  const file = path.join(path.dirname(config.databasePath), '.gdd-device-id');
+  const read = () => {
+    const value = fs.readFileSync(file, 'utf8').trim();
+    if (!/^[a-f0-9-]{36}-dz_astock_gdd$/.test(value)) {
+      throw new Error('GDD 设备标识文件格式错误：' + file);
+    }
+    return value;
+  };
+  if (fs.existsSync(file)) return read();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const device = randomUUID() + '-dz_astock_gdd';
+  try {
+    fs.writeFileSync(file, device + '\n', { flag: 'wx', mode: 0o600 });
+    return device;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return read();
+    throw error;
+  }
+}
 
-  const config = await postJson(
-    (process.env.GDD_BUSINESS_URL || BUSINESS_BASE).replace(/\/+$/, '') + '/investment-adviser/config/query_server_info',
+async function discoverGateway(signal?: AbortSignal): Promise<string> {
+  const account = String(process.env.GDD_ACCOUNT || '').trim();
+  const password = process.env.GDD_PASSWORD || '';
+  if (!account || !password) {
+    throw new Error('GDD 未配置账号密码：请在 web/.env 设置 GDD_ACCOUNT 和 GDD_PASSWORD');
+  }
+  const device = getGddDeviceId();
+  const pass = (process.env.GDD_PASSWORD_MODE || 'plain').toLowerCase() === 'md5'
+    ? createHash('md5').update(password).digest('hex') : password;
+  const businessBase = (process.env.GDD_BUSINESS_URL || BUSINESS_BASE).replace(/\/+$/, '');
+  const login = await postJson(
+    businessBase + '/investment-adviser/customer/login',
+    { account, password: pass, device, orgCode: '0007', loginType: 1, verificationCode: '' },
+    appHeaders(), signal
+  );
+  if (Number(login.code ?? login.ret) !== 0 || !login.result?.sessionCode) {
+    // 错误响应可能包含用户名或会话，不透传服务端原始字符串。
+    throw new Error('GDD 登录失败，请检查账号密码、设备限制或客户端版本');
+  }
+  const session = String(login.result.sessionCode);
+  const servers = await postJson(
+    businessBase + '/investment-adviser/config/query_server_info',
     { sessionCode: session },
     appHeaders(session), signal
   );
-  if (Number(config.code ?? config.ret) !== 0) throw new Error('GDD 服务器清单获取失败');
-  const gateway = config.result?.sers?.find((item: any) => Number(item.serverType) === 36);
+  if (Number(servers.code ?? servers.ret) !== 0) throw new Error('GDD 服务器清单查询失败');
+  const gateway = servers.result?.sers?.find((item: any) => Number(item.serverType) === 36);
   const port = Number(gateway?.serverPort);
-  // 不接受任意域名或路径：服务端下发的网关应该是 IPv4 + 合法端口。
   if (!gateway || !/^\d{1,3}(\.\d{1,3}){3}$/.test(String(gateway.ip)) ||
       String(gateway.ip).split('.').some((part: string) => Number(part) > 255) ||
       !Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -90,13 +122,20 @@ async function discoverGateway(signal?: AbortSignal): Promise<string> {
   return gatewayUrl('http://' + gateway.ip + ':' + port + '/');
 }
 
-/** 启用了动态发现才会访问登录/配置接口；默认使用已实测网关地址。 */
+export function invalidateGddGateway(): void {
+  cachedGateway = undefined;
+}
+
+/**
+ * 动态发现结果缓存15分钟，同一时刻的多次并发请求共享一次登录。
+ * 下游因网络或服务临时不可达失败时，行情请求会强制重新发现并重试一次。
+ */
 export async function getGddGateway(signal?: AbortSignal): Promise<string> {
   if (cachedGateway && cachedGateway.until > Date.now()) return cachedGateway.url;
   if (!discoveryPromise) {
     discoveryPromise = discoverGateway(signal)
       .then((url) => {
-        cachedGateway = { url, until: Date.now() + 30 * 60_000 };
+        cachedGateway = { url, until: Date.now() + DISCOVERY_TTL_MS };
         return url;
       }).finally(() => { discoveryPromise = undefined; });
   }
@@ -114,16 +153,30 @@ export function gddMarketCode(code: string): number {
 }
 
 async function requestQuote(reqtype: number, reqid: number, data: object, signal?: AbortSignal): Promise<any> {
-  const url = await getGddGateway(signal);
-  const response = await postJson(url, { reqtype, reqid, session: '', data }, {}, signal);
-  if (response.reqtype !== undefined && Number(response.reqtype) !== reqtype) {
-    throw new Error('GDD 响应 reqtype 不匹配');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const url = await getGddGateway(signal);
+    let response: any;
+    try {
+      response = await postJson(url, { reqtype, reqid, session: '', data }, {}, signal);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = error instanceof TypeError || /GDD HTTP (502|503|504)|fetch failed|aborted/i.test(message);
+      if (attempt === 0 && retryable && !signal?.aborted) {
+        invalidateGddGateway();
+        continue;
+      }
+      throw error;
+    }
+    if (response.reqtype !== undefined && Number(response.reqtype) !== reqtype) {
+      throw new Error('GDD 响应 reqtype 不匹配');
+    }
+    const status = Number(response.status ?? 0);
+    if (status !== 0) {
+      throw new Error('GDD 行情失败 status=' + status + '：' + String(response.msg || '').slice(0, 160));
+    }
+    return response.data || {};
   }
-  const status = Number(response.status ?? 0);
-  if (status !== 0) {
-    throw new Error('GDD 行情失败 status=' + status + '：' + String(response.msg || '').slice(0, 160));
-  }
-  return response.data || {};
+  throw new Error('GDD 动态网关重试失败');
 }
 
 function timestamp(raw: unknown, minute = false): string {
