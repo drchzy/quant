@@ -1,48 +1,51 @@
-# GDD 行情 Provider（实验性）
+# GDD 行情 Provider（动态网关发现）
 
-GDD 为市场数据服务增加一个**可选、默认关闭**的数据源，兼容单镜像、单容器、统一 8088 端口。
+Quant 在现有 market-data 模块内提供 GDD 可选行情源，不新增容器或端口；Web 统一入口仍为 8088。
 
-## 已接入
+## 使用方式
 
-- HTTP K线：向动态下发的行情网关根路径 POST JSON，reqtype=150；支持日K，以及 5/15/30/60 分钟K请求。
-- HTTP 历史分时：reqtype=152（timevalue0=90、timevalue1=420），可通过页面的盘中读取或 GET /api/v1/gdd/trend/300505?day=2026-10-13 获取。
-- 自动发现：sessionCode 或账号密码登录后，从 /investment-adviser/config/query_server_info 的 result.sers 中选 serverType=36，而非 serverId。
-- 股票编码：300/301 开头为创业板 market=1008。其余 A 股编号按下发的 ums.marketCode 做初步映射，但**未逐一现场验证**。
-- K线、分时结果为二维数组，首行是表头、数据从索引1开始。已核对协议样例 K 线表头为 time/open/high/low/close/volume/amount，分时表头为 time/price/avg/volume/amount/hold。分时数字 time 按当日 UTC 分钟偏移换算到北京时间（90→09:30，420→15:00）；实际服务端返回格式仍应结合现场数据核验。解析时根据表头名称识别字段并验证 OHLC；**无法识别就报错，不猜列序、不写库**。
-- 用户在“数据同步 → 数据源管理”选择 GDD、测试 daily、配置优先级，然后可同步指定股票历史日K（优先级由用户决定）。GDD 失败时按原有 Provider 顺序降级。
-- 实时 WebSocket（reqtype=200/250/251）与分笔 reqtype=151 暂未接入，不标记为已验证。
+只需在**宿主机** \`web/.env\` 配置这两个参数（不要把真实密码提交到 GitHub）：
 
-## 配置
+\`\`\`dotenv
+GDD_ACCOUNT="<GDD登录账号>"
+GDD_PASSWORD="<GDD登录明文密码>"
+\`\`\`
 
-修改宿主机 web/.env，重启 Quant：
+重启 Quant：\`docker restart quant\`，在“数据同步 → 数据源管理”启用 GDD，再测试 daily/分钟K。
 
-```dotenv
-# 直连已测试网关（不配置登录凭据也能发送 session="" 的行情请求）
-GDD_GATEWAY_URL="http://8.129.13.151:19920/"
-# 动态网关发现两种方式：已有 sessionCode；或者账号密码、设备 UUID
-GDD_SESSION_CODE=""
-GDD_ACCOUNT=""
-GDD_PASSWORD=""
-GDD_DEVICE=""
-GDD_PASSWORD_MODE="plain"
-GDD_VERSION_NUMBER="1.20.0"
-GDD_SYSTEM_TYPE="Android"
-GDD_BUSINESS_URL="http://120.76.229.148:1080"
-GDD_TIMEOUT_MS="12000"
-```
+### 自动登录与动态网关
 
-当 GDD_SESSION_CODE 非空时查询服务器清单；否则如果账号、密码、设备 UUID 均有值，则先登录再查询服务器清单。均不满足时使用 GDD_GATEWAY_URL。网关发现结果缓存30分钟。
+每次缓存到期（15分钟）或网关连接失败时：
 
-**安全提醒：**原接口是明文 HTTP，包含密码或 sessionCode 的请求有窃听风险；只在可信网络中使用，建议通过受控代理或 HTTPS 网关，不要将真实密码、sessionCode 或设备UUID提交至 GitHub。web/.env 在部署中应限制读权限。
+1. 使用 GDD_ACCOUNT/GDD_PASSWORD 登录业务地址 \`http://120.76.229.148:1080/investment-adviser/customer/login\`，密码默认以明文发送（与实际客户端抓包一致）。其他固定字段：orgCode=0007，loginType=1。
+2. 自动生成设备 UUID，首次使用写入 \`web/data/.gdd-device-id\`。容器重建后保留同一设备 ID；无需配置 GDD_DEVICE。
+3. 从登录响应提取 sessionCode（仅在内存中），调用 \`/investment-adviser/config/query_server_info\`（请求头与 body 同时携带 sessionCode）。
+4. 在 \`result.sers\` 中找到 \`serverType=36\`（0x24）并验证 IPv4 + 端口。
+5. 将行情 HTTP 请求发送至该地址的 \`/\`；行情 JSON 保持 \`session:""\`。
+6. 网关地址缓存15分钟；连接超时、HTTP 502/503/504 等可重试故障将清除缓存、重新登录并查询地址后**最多重试一次**。
 
-## API 与诊断
+**不再从 GDD_GATEWAY_URL/GDD_SESSION_CODE 读取静态地址或旧会话，不允许缺少登录凭据时直连上一次记录的 IP。** 原有配置中若还有这两个旧变量，可删除。业务接口基址默认固定，只有部署网络特殊时才需覆盖 GDD_BUSINESS_URL。
 
-- GET /api/v1/data-sources：读取 GDD 的启用状态、能力和优先级
-- PUT /api/v1/data-sources：保存启用状态和排序
-- POST /api/v1/data-sources/test：`{"source":"gdd","capability":"daily"}`
-- GET /api/v1/stocks/300505/daily?days=5&refresh=true：经过数据源优先级获取日K并保存 DuckDB
-- GET /api/v1/gdd/trend/300505?day=2026-10-13：GDD 启用时请求历史分时
+业务服务使用明文 HTTP，网络传输凭据可能被窃听。请在可信网络中部署，或配置可信 TLS 反向代理；限制宿主机 \`web/.env\` 和 \`web/data/.gdd-device-id\` 文件权限。不要在日志和工单中张贴 sessionCode。
 
-因为上游尚未提供真实 kline 和 trend 的首行表头样例，当前解析支持标准中英文列名。若测试返回“GDD 表头无法匹配字段”，请只提供 **data.kline[0]** 或 **data.trend[0]**（不包含凭据），以便精确确定真实列位。不会在字段不确定时采用错误的价格或成交量。
+## 行情能力
 
-未启用 GDD 不影响新浪、腾讯和现有东财同步。默认优先级新浪10、腾讯20、GDD25、东方财富数据中心30、东方财富行情40、Tushare50。GDD 默认关闭。
+| 功能 | ReqType | 说明 |
+|---|---:|---|
+| 日K和历史周期K线 | 150 | marketCode，二维表头、OHLC 校验后入库 |
+| 历史/指定日期分时 | 152 | day、timetype=0、timevalue0=90、timevalue1=420 |
+| 分笔成交 | 151 | 命令已知，尚未实现接口与持久化 |
+| WebSocket 实时订阅 | 200/201/202 | 命令已知，尚未启用服务端实时长连 |
+
+市场编码：创业板 300/301 对应 market=1008；深证主板 1001、上证A股 1、科创板 7 为服务器下发的候选映射，仍需逐票验证。
+
+插件行情 ReqType 与方法名见 \`docs/gdd-plugin-api.md\`；**请求体 Data 仍需从 RequestUtils 构造器核实**。没有为客户端暴露任意参数透传接口，避免将上游无鉴权服务变成公共代理。
+
+## 检查
+
+- \`GET /api/v1/data-sources\`：GDD 条目中的 available 只有配置两项凭据后才为 true。
+- \`POST /api/v1/data-sources/test\`，JSON：\`{"source":"gdd","capability":"daily"}\`
+- \`GET /api/v1/stocks/300505/daily?days=5&refresh=true\`：走当前启用源顺序。
+- \`GET /api/v1/gdd/trend/300505?day=2026-10-13\`：GDD 历史分时专用读取，需启用。
+
+由于实盘 K 线和分时的完整表头尚未在当前对话中提供，解析器按已知表头名称严格识别、校验，无法识别字段即报错、不会猜测写库。CI 对登录、设备持久化、网关动态变化和解析逻辑使用模拟响应，不代表上游实时业务可达。
