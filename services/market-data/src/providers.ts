@@ -144,6 +144,8 @@ function sourceInterval(source: DataSourceId): number {
       return 180;
     case 'tushare':
       return 350;
+    case 'gdd':
+      return 250;
   }
 }
 
