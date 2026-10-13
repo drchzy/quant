@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
-import { fetchGddTrend } from './gdd.js';
+import { fetchGddTrend, fetchGddTicks, fetchGddKline, getGddServerAddress } from './gdd.js';
+import { GDD_FEATURES, queryGddFeature } from './gdd-features.js';
 import { importBridgeRows, getBridgeCounts } from './external-bridge.js';
 import {
   getAiStock,
@@ -200,6 +201,90 @@ export async function registerRoutes(
   });
 
   // 历史分时专用接口：仅在 GDD 已由用户启用时可用，避免绕过数据源开关。
+  // 只读插件功能目录：前端无需知道 ReqType 的构造细节。
+  app.get('/api/v1/gdd/features', async () => ({
+    features: GDD_FEATURES.map(({ id, title, group, description, reqtype, fields }) =>
+      ({ id, title, group, description, reqtype, fields })),
+    configured: !!String(process.env.GDD_ACCOUNT || '').trim() &&
+                !!String(process.env.GDD_PASSWORD || '').trim()
+  }));
+
+  // 受控的 GDD 功能查询：命令名称/字段/数值全部由服务端白名单校验；
+  // 不接受任意 ReqType、任意 JSON Data，限制请求频率保护上游。
+  const gddQueryTimes: number[] = [];
+  const rateLimitGdd = () => {
+    const now = Date.now();
+    while (gddQueryTimes.length && gddQueryTimes[0] < now - 60_000) gddQueryTimes.shift();
+    if (gddQueryTimes.length >= 30) return false;
+    gddQueryTimes.push(now);
+    return true;
+  };
+  app.get('/api/v1/gdd/features/:id', async (request, reply) => {
+    try {
+      const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');
+      if (!gdd?.enabled || !gdd.available) {
+        return reply.code(503).send({ error: '请先配置 GDD 账号密码，在数据源管理中启用 GDD' });
+      }
+      if (!rateLimitGdd()) return reply.code(429).send({ error: 'GDD 请求过于频繁，稍后再试' });
+      const { id } = request.params as { id: string };
+      const params = request.query as Record<string, unknown>;
+      return await queryGddFeature(id, params);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : 'GDD 查询失败' });
+    }
+  });
+
+  app.get('/api/v1/gdd/connection', async (request, reply) => {
+    try {
+      const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');
+      if (!gdd?.enabled || !gdd.available) {
+        return reply.code(503).send({ error: '请先配置 GDD 账号密码并启用数据源' });
+      }
+      if (!rateLimitGdd()) return reply.code(429).send({error:'GDD 请求过于频繁'});
+      const gateway = await getGddServerAddress(36);
+      let lhb: string|null = null;
+      try { lhb = await getGddServerAddress(35); } catch { /* 仅标识该服务未下发 */ }
+      return { authenticated:true, gateway, lhb, serverType:36, checkedAt:new Date().toISOString() };
+    } catch (error) {
+      return reply.code(502).send({ error:error instanceof Error ? error.message:'GDD 动态网关连接失败' });
+    }
+  });
+
+  app.get('/api/v1/gdd/kline/:code', async (request, reply) => {
+    try {
+      const gdd = (await getSourceSettings()).find((item)=>item.id==='gdd');
+      if (!gdd?.enabled || !gdd.available) return reply.code(503).send({error:'请先启用 GDD 并配置账号密码'});
+      if (!rateLimitGdd()) return reply.code(429).send({error:'GDD 请求过于频繁'});
+      const {code} = request.params as {code:string};
+      const {period:rawPeriod,count:rawCount} = request.query as {period?:string;count?:string};
+      const period = Number(rawPeriod ?? 10);
+      if (![2,3,4,5,6,7,10,11,20,21,30].includes(period)) return reply.code(400).send({error:'不支持此 K线周期'});
+      const count = Number(rawCount ?? 100);
+      if (!Number.isInteger(count) || count < 1 || count > 500) return reply.code(400).send({error:'count 必须是1～500'});
+      const stockCode = normalizeStockCode(code);
+      const data = await fetchGddKline(stockCode,period,count);
+      return {source:'gdd',reqtype:150,code:stockCode,period,count:data.length,data};
+    } catch(error) {
+      return reply.code(400).send({error:error instanceof Error?error.message:'GDD K线查询失败'});
+    }
+  });
+
+  app.get('/api/v1/gdd/ticks/:code', async (request, reply) => {
+    try {
+      const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');
+      if (!gdd?.enabled || !gdd.available) return reply.code(503).send({ error: '请先启用 GDD 并配置账号密码' });
+      if (!rateLimitGdd()) return reply.code(429).send({ error: 'GDD 请求过于频繁，稍后再试' });
+      const { code } = request.params as { code:string };
+      const { day } = request.query as { day?:string };
+      if (!day) return reply.code(400).send({ error: 'day 不能为空' });
+      const normalized = normalizeStockCode(code);
+      const data = await fetchGddTicks(normalized, day);
+      return { source:'gdd', code:normalized, day, count:data.length, data };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : 'GDD 分笔查询失败' });
+    }
+  });
+
   app.get('/api/v1/gdd/trend/:code', async (request, reply) => {
     try {
       const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');

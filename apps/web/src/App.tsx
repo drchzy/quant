@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost, apiPut, formatMoney, formatPct } from './api';
 import { DailyChart, MinuteChart } from './charts';
+import GddPage from './GddPage';
 
-type Page = 'market' | 'stock' | 'sector' | 'select' | 'trading' | 'review' | 'sync';
+type Page = 'market' | 'stock' | 'sector' | 'gdd' | 'select' | 'trading' | 'review' | 'sync';
 
 function Change({ value }: { value: unknown }) {
   if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) {
@@ -1843,6 +1844,7 @@ export default function App() {
     ['market', '市场总览'],
     ['stock', '股票查询'],
     ['sector', '板块对比'],
+    ['gdd', 'GDD 行情工作台'],
     ['select', '每日选股'],
     ['trading', '盘中执行'],
     ['review', '策略复盘'],
@@ -1874,6 +1876,7 @@ export default function App() {
         {page === 'market' && <MarketPage />}
         {page === 'stock' && <StockPage />}
         {page === 'sector' && <SectorPage />}
+        {page === 'gdd' && <GddPage />}
         {page === 'select' && <SelectPage />}
         {page === 'trading' && <TradingPage />}
         {page === 'review' && <ReviewPage />}
