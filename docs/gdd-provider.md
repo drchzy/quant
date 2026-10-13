@@ -8,7 +8,7 @@ GDD 为市场数据服务增加一个**可选、默认关闭**的数据源，兼
 - HTTP 历史分时：reqtype=152（timevalue0=90、timevalue1=420），可通过页面的盘中读取或 GET /api/v1/gdd/trend/300505?day=2026-10-13 获取。
 - 自动发现：sessionCode 或账号密码登录后，从 /investment-adviser/config/query_server_info 的 result.sers 中选 serverType=36，而非 serverId。
 - 股票编码：300/301 开头为创业板 market=1008。其余 A 股编号按下发的 ums.marketCode 做初步映射，但**未逐一现场验证**。
-- K线、分时结果为二维数组，首行是表头、数据从索引1开始。解析时根据表头名称识别字段并验证 OHLC；**无法识别就报错，不猜列序、不写库**。
+- K线、分时结果为二维数组，首行是表头、数据从索引1开始。已核对协议样例 K 线表头为 time/open/high/low/close/volume/amount，分时表头为 time/price/avg/volume/amount/hold。分时数字 time 按当日 UTC 分钟偏移换算到北京时间（90→09:30，420→15:00）；实际服务端返回格式仍应结合现场数据核验。解析时根据表头名称识别字段并验证 OHLC；**无法识别就报错，不猜列序、不写库**。
 - 用户在“数据同步 → 数据源管理”选择 GDD、测试 daily、配置优先级，然后可同步指定股票历史日K（优先级由用户决定）。GDD 失败时按原有 Provider 顺序降级。
 - 实时 WebSocket（reqtype=200/250/251）与分笔 reqtype=151 暂未接入，不标记为已验证。
 
