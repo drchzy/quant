@@ -11,8 +11,8 @@ import type { DailyBar } from './providers.js';
  */
 const BUSINESS_BASE = 'http://120.76.229.148:1080';
 const DISCOVERY_TTL_MS = 15 * 60_000;
-let cachedGateway: { url: string; until: number } | undefined;
-let discoveryPromise: Promise<string> | undefined;
+let cachedServers: { urls: Partial<Record<35 | 36, string>>; until: number } | undefined;
+let discoveryPromise: Promise<Partial<Record<35 | 36, string>>> | undefined;
 
 function gatewayUrl(raw: string): string {
   const url = new URL(raw);
@@ -86,7 +86,7 @@ export function getGddDeviceId(): string {
   }
 }
 
-async function discoverGateway(signal?: AbortSignal): Promise<string> {
+async function discoverServers(signal?: AbortSignal): Promise<Partial<Record<35 | 36, string>>> {
   const account = String(process.env.GDD_ACCOUNT || '').trim();
   const password = process.env.GDD_PASSWORD || '';
   if (!account || !password) {
@@ -112,34 +112,49 @@ async function discoverGateway(signal?: AbortSignal): Promise<string> {
     appHeaders(session), signal
   );
   if (Number(servers.code ?? servers.ret) !== 0) throw new Error('GDD 服务器清单查询失败');
-  const gateway = servers.result?.sers?.find((item: any) => Number(item.serverType) === 36);
-  const port = Number(gateway?.serverPort);
-  if (!gateway || !/^\d{1,3}(\.\d{1,3}){3}$/.test(String(gateway.ip)) ||
-      String(gateway.ip).split('.').some((part: string) => Number(part) > 255) ||
-      !Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error('GDD 未下发有效的 serverType=36 行情网关');
+  const urls: Partial<Record<35 | 36, string>> = {};
+  for (const item of Array.isArray(servers.result?.sers) ? servers.result.sers : []) {
+    const type = Number(item.serverType);
+    if (type !== 35 && type !== 36) continue;
+    const port = Number(item.serverPort);
+    const ip = String(item.ip ?? '');
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ||
+        ip.split('.').some((segment) => Number(segment) > 255) ||
+        !Number.isInteger(port) || port <= 0 || port > 65535) continue;
+    urls[type as 35 | 36] = gatewayUrl('http://' + ip + ':' + port + '/');
   }
-  return gatewayUrl('http://' + gateway.ip + ':' + port + '/');
+  if (!urls[36]) throw new Error('GDD 未下发有效的 serverType=36 行情网关');
+  return urls;
 }
 
 export function invalidateGddGateway(): void {
-  cachedGateway = undefined;
+  cachedServers = undefined;
 }
 
 /**
- * 动态发现结果缓存15分钟，同一时刻的多次并发请求共享一次登录。
- * 下游因网络或服务临时不可达失败时，行情请求会强制重新发现并重试一次。
+ * 一次登录获取完整服务器清单：36 行情统一网关、35 龙虎榜服务。
+ * 缓存15分钟；连接失败后调用 invalidateGddGateway 重新登录发现。
  */
-export async function getGddGateway(signal?: AbortSignal): Promise<string> {
-  if (cachedGateway && cachedGateway.until > Date.now()) return cachedGateway.url;
-  if (!discoveryPromise) {
-    discoveryPromise = discoverGateway(signal)
-      .then((url) => {
-        cachedGateway = { url, until: Date.now() + DISCOVERY_TTL_MS };
-        return url;
-      }).finally(() => { discoveryPromise = undefined; });
+export async function getGddServerAddress(type: 35 | 36, signal?: AbortSignal): Promise<string> {
+  if (cachedServers && cachedServers.until > Date.now()) {
+    const url = cachedServers.urls[type];
+    if (!url) throw new Error('GDD 服务清单中不存在 serverType=' + type);
+    return url;
   }
-  return discoveryPromise;
+  if (!discoveryPromise) {
+    discoveryPromise = discoverServers(signal).then((urls) => {
+      cachedServers = { urls, until: Date.now() + DISCOVERY_TTL_MS };
+      return urls;
+    }).finally(() => { discoveryPromise = undefined; });
+  }
+  const servers = await discoveryPromise;
+  const url = servers[type];
+  if (!url) throw new Error('GDD 服务清单中不存在 serverType=' + type);
+  return url;
+}
+
+export async function getGddGateway(signal?: AbortSignal): Promise<string> {
+  return getGddServerAddress(36, signal);
 }
 
 export function gddMarketCode(code: string): number {
