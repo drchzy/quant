@@ -105,7 +105,7 @@ export async function getGddGateway(signal?: AbortSignal): Promise<string> {
 
 export function gddMarketCode(code: string): number {
   if (!/^\d{6}$/.test(code)) throw new Error('GDD 股票代码必须为6位数字');
-  if (/^30/.test(code)) return 1008;
+  if (/^3/.test(code)) return 1008;
   if (/^68/.test(code)) return 7;
   if (/^(6|5|9)/.test(code)) return 1;
   if (/^(0|2|3)/.test(code)) return 1001;
