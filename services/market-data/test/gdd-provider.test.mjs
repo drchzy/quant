@@ -54,6 +54,14 @@ test('GDD parses verified trend envelope and preserves previous close', () => {
   assert.equal(rows[0].datetime, '2026-10-13 09:30:00');
   assert.equal(rows[0].pct, 5);
   assert.equal(rows[0].avgPrice, 10.2);
+  // 返回为整数分钟时，老协议采用 UTC 日期分钟偏移（90即北京时间09:30）。
+  const numericRows = parseGddTrend({
+    prevclose: 10,
+    trend: [['time', 'price', 'avg', 'volume', 'amount'],
+      [90, 10.5, 10.2, 30, 300], [420, 10.6, 10.3, 45, 600]]
+  }, '2026-10-13');
+  assert.equal(numericRows[0].datetime, '2026-10-13 09:30:00');
+  assert.equal(numericRows[1].datetime, '2026-10-13 15:00:00');
 });
 
 test('GDD discovers type=36 gateway, then sends reqtype=150 with session empty', async () => {
