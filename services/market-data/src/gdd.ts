@@ -250,9 +250,23 @@ export function parseGddTrend(data: any, day: string): GddTrendRow[] {
   const previous = Number(data.prevclose);
   return rows.filter(Array.isArray).map((row) => {
     const price = numeric(row, idx.price)!;
-    const timeRaw = String(row[idx.tradeTime] ?? '');
-    const full = /^\d{4}-/.test(timeRaw) ? timeRaw : day + ' ' + timeRaw;
-    const datetime = timestamp(full, true);
+    const timeRaw = String(row[idx.tradeTime] ?? '').trim();
+    let datetime: string;
+    if (/^\d+$/.test(timeRaw)) {
+      // GDD A股分时分钟偏移相对 UTC 当天：90→北京时间09:30，420→15:00。
+      // 只接受有效分钟范围，防止把秒级时间戳误当分钟。
+      const minutes = Number(timeRaw);
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes >= 1440) {
+        throw new Error('GDD 分时时间分钟偏移无效');
+      }
+      const base = Date.parse(day + 'T00:00:00Z');
+      if (!Number.isFinite(base)) throw new Error('GDD 分时日期无效');
+      datetime = new Date(base + (minutes + 480) * 60_000)
+        .toISOString().slice(0, 19).replace('T', ' ');
+    } else {
+      const full = /^\d{4}-/.test(timeRaw) ? timeRaw : day + ' ' + timeRaw;
+      datetime = timestamp(full, true);
+    }
     const avg = numeric(row, idx.avgPrice, false);
     return {
       datetime, time: datetime.slice(11, 16), price,
