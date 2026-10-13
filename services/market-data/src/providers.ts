@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { fetchGddDaily, fetchGddKline, testGdd } from './gdd.js';
 import type { MarketStock, SectorRow, SectorType } from './types.js';
 
 export type DataSourceId =
@@ -6,7 +7,8 @@ export type DataSourceId =
   | 'tencent'
   | 'eastmoney_datacenter'
   | 'eastmoney_push2'
-  | 'tushare';
+  | 'tushare'
+  | 'gdd';
 
 export type DataCapability =
   | 'snapshot'
@@ -62,6 +64,16 @@ export const dataSourceDefinitions: DataSourceDefinition[] = [
     capabilities: ['daily', 'minute', 'index', 'quote'],
     defaultEnabled: true,
     defaultPriority: 20
+  },
+  {
+    id: 'gdd',
+    name: 'GDD 行情',
+    description: '独立统一行情网关：日K、历史分钟K，支持按 sessionCode 动态发现网关。需验证上游表头。',
+    independent: true,
+    needsToken: false,
+    capabilities: ['daily', 'minute'],
+    defaultEnabled: false,
+    defaultPriority: 25
   },
   {
     id: 'eastmoney_datacenter',
@@ -132,6 +144,8 @@ function sourceInterval(source: DataSourceId): number {
       return 180;
     case 'tushare':
       return 350;
+    case 'gdd':
+      return 250;
   }
 }
 
@@ -1149,6 +1163,16 @@ export async function testDataSource(
       };
     }
 
+    case 'gdd': {
+      if (target === 'minute') {
+        const rows = await fetchGddKline('300505', 2, 5, signal);
+        if (!rows.length) throw new Error('GDD 5分钟K返回为空');
+        return { capability: 'minute', count: rows.length, sample: rows.at(-1) || null };
+      }
+      const result = await testGdd(signal);
+      return { capability: 'daily', ...result };
+    }
+
     case 'eastmoney_push2': {
       if (target === 'quote') {
         const quote = await fetchStockQuoteBySource('eastmoney_push2', '600000', signal);
@@ -1499,6 +1523,8 @@ export async function fetchDailyBySource(
   signal?: AbortSignal
 ): Promise<DailyBar[]> {
   switch (source) {
+    case 'gdd':
+      return fetchGddDaily(code, limit, signal);
     case 'tencent':
       return fetchTencentDaily(code, limit, signal);
     case 'eastmoney_push2':
@@ -1518,6 +1544,11 @@ export async function fetchMinuteBySource(
   signal?: AbortSignal
 ): Promise<DailyBar[]> {
   switch (source) {
+    case 'gdd': {
+      const cycle: Record<number, number> = { 5: 2, 15: 5, 30: 6, 60: 3 };
+      if (!cycle[period]) throw new Error('GDD 1分钟数据请使用 reqtype=152 分时接口');
+      return fetchGddKline(code, cycle[period], limit, signal);
+    }
     case 'tencent':
       return fetchTencentMinute(
         code,
