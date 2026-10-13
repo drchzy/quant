@@ -1011,3 +1011,51 @@ input {
   background: #f8fafc;
   color: #94a3b8;
 }
+
+
+/* GDD 行情工作台：仅桌面展示双栏，窄屏使用纵向布局。 */
+.gdd-page { width:100%; min-width:0; }
+.gdd-readonly,.gdd-flag { background:#eff6ff; color:#1d4ed8; padding:8px 12px; border-radius:100px; font-size:12px; white-space:nowrap; }
+.gdd-status-line { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:18px; }
+.gdd-status-card { background:#fff; border-radius:12px; border:1px solid #e2e8f0; padding:16px; display:flex; flex-direction:column; gap:10px; }
+.gdd-status-card span { font-size:12px; color:#64748b; }
+.gdd-status-card strong { font-size:19px; color:#182230; }
+.gdd-status-card strong.gdd-good {color:#15803d;} .gdd-status-card strong.gdd-warn {color:#b45309;}
+.gdd-groups { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0; }
+.gdd-groups button { border:1px solid #cbd5e1; background:#fff; color:#475569; padding:9px 14px; border-radius:8px; }
+.gdd-groups button.selected {background:#2563eb;color:#fff;border-color:#2563eb;}
+.gdd-workspace { display:grid; grid-template-columns:minmax(170px,215px) minmax(0,1fr); gap:16px; align-items:start; }
+.gdd-workspace>.gdd-feature-nav { background:#fff; color:#182230; border:1px solid #e2e8f0; border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.gdd-feature-nav h3 { margin:4px 7px 12px; font-size:15px; }
+.gdd-feature-nav button { display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:10px 12px; width:100%; background:#fff; border:0; border-radius:8px; text-align:left; color:#334155; }
+.gdd-feature-nav button:hover,.gdd-feature-nav button.selected {background:#eff6ff;color:#1d4ed8;}
+.gdd-feature-nav small {font-size:11px;opacity:.68;}
+.gdd-query-panel {min-width:0;}
+.gdd-panel-head {display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;}
+.gdd-panel-head h3 {margin:0;} .gdd-panel-head p {color:#64748b;margin:8px 0 16px; font-size:13px;}
+.gdd-form {display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px 14px;margin:14px 0;}
+.gdd-form label {display:flex;flex-direction:column;gap:6px;color:#475569;font-size:13px;}
+.gdd-form input {min-height:38px;border:1px solid #cbd5e1;border-radius:8px; padding:8px 10px; background:#fff; color:#1e293b; min-width:0;}
+.gdd-form input:focus {outline:2px solid #bfdbfe;border-color:#2563eb;}
+.gdd-actions {display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0 24px;}
+.gdd-actions span {font-size:12px;color:#64748b;}
+.gdd-run {background:#2563eb;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;}
+.gdd-run:disabled {opacity:.48;cursor:not-allowed;}
+.gdd-results-header {display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid #e2e8f0;padding-top:18px;}
+.gdd-results-header h3 {margin:0;} .gdd-results-header span {font-size:12px;color:#64748b;}
+.gdd-metrics {display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:14px 0;}
+.gdd-metrics>div {background:#f1f5f9;border-radius:9px;padding:12px;min-width:0;}
+.gdd-metrics span {display:block;color:#64748b;font-size:12px;margin-bottom:7px;}
+.gdd-metrics b {font-size:17px;word-break:break-all;}
+.gdd-table-scroll {overflow:auto;max-height:540px;border:1px solid #e2e8f0;border-radius:9px;}
+.gdd-table-scroll table {min-width:600px;width:100%;font-size:12px;border-collapse:collapse;}
+.gdd-table-scroll th {position:sticky;top:0;background:#eff6ff;white-space:nowrap;z-index:1;}
+.gdd-table-scroll td {max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gdd-table-scroll th,.gdd-table-scroll td {padding:10px;border-bottom:1px solid #f1f5f9;text-align:left;}
+.gdd-table-scroll tbody tr:hover {background:#f8fafc;}
+.gdd-json {margin:18px 0 0;padding:12px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;}
+.gdd-json summary {cursor:pointer;}
+.gdd-json pre {max-height:390px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:12px;border-radius:8px;}
+.gdd-footnote {color:#64748b;font-size:12px;line-height:1.8;margin:24px 0;}
+@media(max-width:1050px) {.gdd-status-line{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:650px) {.gdd-workspace{grid-template-columns:minmax(0,1fr)}.gdd-status-line{grid-template-columns:repeat(2,minmax(0,1fr))}.gdd-workspace>.gdd-feature-nav{flex-direction:row;flex-wrap:wrap}.gdd-feature-nav h3{width:100%;}.gdd-feature-nav button{width:auto;flex:1 1 120px}.gdd-flag{white-space:normal}}
