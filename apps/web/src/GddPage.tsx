@@ -65,7 +65,11 @@ export default function GddPage() {
   const [params,setParams] = useState<Record<string,string>>({});
   const [code,setCode] = useState('300505');
   const [day,setDay] = useState(chinaDate);
-  const [timelineMode,setTimelineMode] = useState<'trend'|'ticks'>('trend');
+  const [timelineMode,setTimelineMode] = useState<'trend'|'ticks'|'kline'>('trend');
+  const [klinePeriod,setKlinePeriod] = useState(10);
+  const [klineCount,setKlineCount] = useState(100);
+  const [connection,setConnection] = useState<{gateway:string;lhb:string|null;checkedAt:string}|null>(null);
+  const [checking,setChecking] = useState(false);
   const [response,setResponse] = useState<QueryResponse|null>(null);
   const [working,setWorking] = useState(false);
   const [message,setMessage] = useState('');
@@ -97,9 +101,11 @@ export default function GddPage() {
     try {
       if(group==='timeline') {
         if(!/^\d{6}$/.test(code)) throw Error('股票代码必须为6位数字');
-        const path = '/gdd/'+timelineMode+'/'+encodeURIComponent(code)+'?day='+encodeURIComponent(day);
+        const path = timelineMode === 'kline'
+          ? '/gdd/kline/'+encodeURIComponent(code)+'?period='+klinePeriod+'&count='+klineCount
+          : '/gdd/'+timelineMode+'/'+encodeURIComponent(code)+'?day='+encodeURIComponent(day);
         const data = await apiGet<QueryResponse>(path);
-        setResponse({ ...data, title:timelineMode==='trend'?'历史分时':'历史逐笔', result:data.data });
+        setResponse({ ...data, title:timelineMode==='trend'?'历史分时':timelineMode==='ticks'?'历史逐笔':'历史 K 线', result:data.data });
       } else if(feature) {
         const query = new URLSearchParams();
         for (const f of feature.fields) {
@@ -110,6 +116,12 @@ export default function GddPage() {
       }
     } catch(e) {setMessage(showError(e));}
     finally {setWorking(false);}
+  };
+  const checkConnection = async () => {
+    setChecking(true);setMessage('');
+    try {setConnection(await apiGet<{gateway:string;lhb:string|null;checkedAt:string}>('/gdd/connection'));}
+    catch(e) {setMessage(showError(e));}
+    finally {setChecking(false);}
   };
   const summary = response ? valueSummary(response.result) : null;
   const keys = summary?.rows.length ? [...new Set(summary.rows.slice(0,20).flatMap(r=>Object.keys(r)))].slice(0,10) : [];
@@ -126,7 +138,11 @@ export default function GddPage() {
       <div className="gdd-status-card"><span>账号配置</span><strong className={configured?'gdd-good':'gdd-warn'}>{configured?'已设置':'未配置'}</strong></div>
       <div className="gdd-status-card"><span>数据源管理</span><strong className={enabled?'gdd-good':'gdd-warn'}>{enabled?'已启用':'未启用'}</strong></div>
       <div className="gdd-status-card"><span>插件功能</span><strong>{catalog.length} 项</strong></div>
-      <div className="gdd-status-card"><span>来源状态</span><strong>实际请求时验证</strong></div>
+      <div className="gdd-status-card"><span>行情网关</span><strong className={connection?'gdd-good':''}>{connection?'连接成功':'尚未验证'}</strong></div>
+    </div>
+    <div className="gdd-connection">
+      <button disabled={!configured||!enabled||checking} onClick={()=>void checkConnection()}>{checking?'正在登录并获取服务器…':'检测动态网关'}</button>
+      {connection && <span>统一行情：{connection.gateway}　龙虎榜：{connection.lhb||'未下发'}　·　{new Date(connection.checkedAt).toLocaleTimeString('zh-CN')}</span>}
     </div>
     {(!configured||!enabled)&&<div className="notice">
       先在宿主机 web/.env 中设置 GDD_ACCOUNT / GDD_PASSWORD，然后到「数据同步 → 数据源管理」启用 GDD。
@@ -142,20 +158,26 @@ export default function GddPage() {
       <aside className="gdd-feature-nav">
         <h3>{groups.find(g=>g[0]===group)?.[1]}</h3>
         {group==='timeline'
-          ? <><button className={timelineMode==='trend'?'selected':''} onClick={()=>{setTimelineMode('trend');setResponse(null);}}>历史分时 · 152</button>
+          ? <><button className={timelineMode==='kline'?'selected':''} onClick={()=>{setTimelineMode('kline');setResponse(null);}}>历史 K 线 · 150</button>
+               <button className={timelineMode==='trend'?'selected':''} onClick={()=>{setTimelineMode('trend');setResponse(null);}}>历史分时 · 152</button>
                <button className={timelineMode==='ticks'?'selected':''} onClick={()=>{setTimelineMode('ticks');setResponse(null);}}>逐笔成交 · 151</button></>
           : visible.map(f=><button key={f.id} className={selected===f.id?'selected':''} onClick={()=>setSelected(f.id)}>
               <span>{f.title}</span><small>ReqType {f.reqtype}</small></button>)}
       </aside>
       <section className="panel gdd-query-panel">
         <div className="gdd-panel-head"><div>
-          <h3>{group==='timeline'?(timelineMode==='trend'?'历史分时':'历史逐笔'):feature?.title||'行情查询'}</h3>
+          <h3>{group==='timeline'?(timelineMode==='trend'?'历史分时':timelineMode==='ticks'?'历史逐笔':'历史 K 线'):feature?.title||'行情查询'}</h3>
           <p>{group==='timeline'?'可指定证券与交易日期；数据显示于下方':feature?.description||'选择左侧功能'}</p>
         </div><span className="gdd-flag">上游实测状态以返回结果为准</span></div>
         <div className="gdd-form">
           {group==='timeline'?<>
             <label>股票代码<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value)}/></label>
-            <label>交易日期<input type="date" value={day} onChange={e=>setDay(e.target.value)}/></label>
+            {timelineMode === 'kline'?<>
+              <label>K线周期<select value={klinePeriod} onChange={e=>setKlinePeriod(Number(e.target.value))}>
+                {[[10,'日K'],[2,'5分钟'],[5,'15分钟'],[6,'30分钟'],[3,'60分钟'],[11,'周K'],[20,'月K'],[21,'季K'],[30,'年K']].map(([k,v])=><option key={k} value={k}>{v}</option>)}
+              </select></label>
+              <label>请求条数<input type="number" min={1} max={500} value={klineCount} onChange={e=>setKlineCount(Number(e.target.value))}/></label>
+            </>:<label>交易日期<input type="date" value={day} onChange={e=>setDay(e.target.value)}/></label>}
           </>:feature?.fields.map(field=><label key={field.key}>{field.label}
             <input type={field.kind==='date'?'date': 'text'}
               inputMode={field.kind==='integer'||field.kind==='stock'?'numeric':undefined}
@@ -174,7 +196,7 @@ export default function GddPage() {
         {response && <>
           <div className="gdd-results-header">
             <h3>{response.title||'行情'} · 查询结果</h3>
-            <span>ReqType {response.reqtype??(group==='timeline'?(timelineMode==='trend'?152:151):'-')}</span>
+            <span>ReqType {response.reqtype??(group==='timeline'?(timelineMode==='trend'?152:timelineMode==='ticks'?151:150):'-')}</span>
           </div>
           <div className="gdd-metrics">
             <div><span>展示记录数</span><b>{summary?.rows.length??0}</b></div>
