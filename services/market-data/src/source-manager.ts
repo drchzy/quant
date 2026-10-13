@@ -76,9 +76,11 @@ export async function getSourceSettings() {
           setting?.enabled ?? definition.defaultEnabled,
         priority:
           Number(setting?.priority) || definition.defaultPriority,
-        available:
-          !definition.needsToken ||
-          !!String(process.env.TUSHARE_TOKEN || '').trim(),
+        available: definition.id === 'gdd'
+          ? !!String(process.env.GDD_ACCOUNT || '').trim() &&
+            !!String(process.env.GDD_PASSWORD || '').trim()
+          : (!definition.needsToken ||
+            !!String(process.env.TUSHARE_TOKEN || '').trim()),
         status: status
           ? {
               lastStatus: status.last_status,
@@ -277,6 +279,16 @@ export async function testSource(
 
   const targetCapability =
     capability || definition.capabilities[0];
+
+  if (definition.id === 'gdd' &&
+      (!String(process.env.GDD_ACCOUNT || '').trim() ||
+       !String(process.env.GDD_PASSWORD || '').trim())) {
+    const message = '请在 web/.env 中配置 GDD_ACCOUNT 和 GDD_PASSWORD';
+    await recordSourceResult(source, {
+      status: 'failed', capability: targetCapability, message, tested: true
+    });
+    throw new Error(message);
+  }
 
   if (
     definition.needsToken &&
