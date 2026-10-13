@@ -345,6 +345,43 @@ export function parseGddTrend(data: any, day: string): GddTrendRow[] {
   }).sort((a, b) => a.datetime.localeCompare(b.datetime));
 }
 
+export interface GddTickRow {
+  time: string;
+  millisecond: number;
+  flag: number;
+  price: number;
+  volume: number;
+  amount: number;
+  type: number;
+}
+
+/** reqtype=151 历史分笔：按原客户端 Candle/Tick 数组位序解析。 */
+export async function fetchGddTicks(code: string, day: string, signal?: AbortSignal): Promise<GddTickRow[]> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day)) ||
+      new Date(day + 'T00:00:00Z').toISOString().slice(0, 10) !== day) {
+    throw new Error('GDD 分笔日期必须为有效 YYYY-MM-DD');
+  }
+  const body = await requestQuote(151, 1, {
+    market: gddMarketCode(code), code,
+    timetype: 0, timevalue0: 90, timevalue1: 420,
+    day: day + ' 0:0:0'
+  }, signal);
+  const raw = body.tick;
+  if (!Array.isArray(raw) || !Array.isArray(raw[0])) throw new Error('GDD 分笔返回缺少 tick 表格');
+  const items: GddTickRow[] = [];
+  for (const row of raw.slice(1, 2001)) {
+    if (!Array.isArray(row) || row.length < 7) throw new Error('GDD 分笔行格式错误');
+    const [time, millisecond, flag, price, volume, amount, type] = row;
+    const nums = [millisecond,flag,price,volume,amount,type].map(Number);
+    if (nums.some((n) => !Number.isFinite(n)) || nums[2] <= 0 || nums[3] < 0 || nums[4] < 0) {
+      throw new Error('GDD 分笔数据包含异常数值');
+    }
+    items.push({ time:String(time), millisecond:nums[0], flag:nums[1],
+      price:nums[2], volume:nums[3], amount:nums[4], type:nums[5] });
+  }
+  return items;
+}
+
 export async function fetchGddTrend(code: string, day?: string, signal?: AbortSignal): Promise<GddTrendRow[]> {
   const market = gddMarketCode(code);
   const now = new Date(Date.now() + 8 * 3600_000);
