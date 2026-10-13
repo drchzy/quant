@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
+import { fetchGddTrend } from './gdd.js';
 import { importBridgeRows, getBridgeCounts } from './external-bridge.js';
 import {
   getAiStock,
@@ -195,6 +196,21 @@ export async function registerRoutes(
       return reply.code(400).send({
         error: error instanceof Error ? error.message : String(error)
       });
+    }
+  });
+
+  // 历史分时专用接口：仅在 GDD 已由用户启用时可用，避免绕过数据源开关。
+  app.get('/api/v1/gdd/trend/:code', async (request, reply) => {
+    try {
+      const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');
+      if (!gdd?.enabled) return reply.code(503).send({ error: '请先在数据源管理中启用 GDD' });
+      const { code } = request.params as { code: string };
+      const { day } = request.query as { day?: string };
+      const stockCode = normalizeStockCode(code);
+      const data = await fetchGddTrend(stockCode, day);
+      return { source: 'gdd', code: stockCode, day: day || null, count: data.length, data };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
