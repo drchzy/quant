@@ -1059,3 +1059,9 @@ input {
 .gdd-footnote {color:#64748b;font-size:12px;line-height:1.8;margin:24px 0;}
 @media(max-width:1050px) {.gdd-status-line{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:650px) {.gdd-workspace{grid-template-columns:minmax(0,1fr)}.gdd-status-line{grid-template-columns:repeat(2,minmax(0,1fr))}.gdd-workspace>.gdd-feature-nav{flex-direction:row;flex-wrap:wrap}.gdd-feature-nav h3{width:100%;}.gdd-feature-nav button{width:auto;flex:1 1 120px}.gdd-flag{white-space:normal}}
+
+.gdd-connection {display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 14px;}
+.gdd-connection button {background:#0f766e;color:white;border:0;border-radius:8px;padding:10px 16px;cursor:pointer;}
+.gdd-connection button:disabled {opacity:.48;cursor:not-allowed;}
+.gdd-connection span {font-size:12px;color:#475569;overflow-wrap:anywhere;min-width:0;}
+.gdd-form select {min-height:38px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:8px 10px;color:#1e293b;}
