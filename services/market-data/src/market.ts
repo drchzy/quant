@@ -1,5 +1,6 @@
 import { all, one, run } from './database.js';
 import { config } from './config.js';
+import { fetchGddTrend } from './gdd.js';
 import { calculateIndicators } from './indicator.js';
 import {
   buildSecid,
@@ -978,6 +979,15 @@ export async function getStockIntraday(code: string, fallbackMinute?: any[]) {
   // AI 接口传入已经按优先级获取的分钟K，不能再额外访问东财。
   if (!fallbackMinute) {
     const minuteSources = await getEnabledSources('minute').catch(() => [] as DataSourceId[]);
+    // GDD 优先级置顶时，使用 reqtype=152 读取真正的历史/当日分时。
+    if (minuteSources[0] === 'gdd') {
+      try {
+        const data = await fetchGddTrend(code);
+        if (data.length > 0) return { source: 'gdd', degraded: false, data };
+      } catch {
+        // 不覆盖既有分钟K或外部桥接数据，GDD暂时不可用时执行原降级链。
+      }
+    }
     // 仅当 Push2 本身排在分钟能力优先级第一时才尝试专用分时。
     if (minuteSources[0] === 'eastmoney_push2' && await isPush2Enabled()) {
       try {
