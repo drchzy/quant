@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet } from './api';
+import GddTerminal from './GddTerminal';
 
 type Field = { key:string; label:string; kind:'integer'|'stock'|'date'|'datetime'; default?:string; min?:number; max?:number };
 type Feature = {id:string;title:string;description:string;group:string;reqtype:number;fields:Field[]};
 type QueryResponse = {id?:string;title?:string;reqtype?:number;receivedAt?:string;result?:unknown;data?:unknown;count?:number;source?:string};
 const groups = [
+  ['terminal','专业行情'],
   ['market','市场情绪'],
   ['sectors','热门板块'],
   ['stocks','个股资金'],
@@ -60,7 +62,7 @@ export default function GddPage() {
   const [catalog,setCatalog] = useState<Feature[]>([]);
   const [configured,setConfigured] = useState(false);
   const [enabled,setEnabled] = useState(false);
-  const [group,setGroup] = useState<string>('market');
+  const [group,setGroup] = useState<string>('terminal');
   const [selected,setSelected] = useState<string>('riseFall');
   const [params,setParams] = useState<Record<string,string>>({});
   const [code,setCode] = useState('300505');
@@ -154,7 +156,7 @@ export default function GddPage() {
         const first=catalog.find(f=>f.group===key);if(first)setSelected(first.id);
       }}>{label}</button>)}
     </div>
-    <div className="gdd-workspace">
+    {group === "terminal" ? <GddTerminal/> : <div className="gdd-workspace">
       <aside className="gdd-feature-nav">
         <h3>{groups.find(g=>g[0]===group)?.[1]}</h3>
         {group==='timeline'
@@ -212,7 +214,7 @@ export default function GddPage() {
           </details>
         </>}
       </section>
-    </div>
+    </div>}
     <p className="gdd-footnote">提示：部分插件参数与响应类型来自 APK 静态逆向，尚未全部经过生产服务器联调。查询失败会显示上游错误，不会用模拟行情替代，也不会直接改变 Quant 选股仓库。</p>
   </div>;
 }
