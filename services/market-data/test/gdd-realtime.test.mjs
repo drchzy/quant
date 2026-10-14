@@ -52,6 +52,7 @@ test('One backend WS socket multiplexes subscriptions and keeps latest pushed qu
     assert.ok(commands.some(m=>m.reqtype===200));
     assert.ok(commands.some(m=>m.reqtype===202));
     const unsub=feed.unsubscribe('300505',1);
+    await new Promise(r=>setTimeout(r,30));
     assert.equal(unsub.removed,true);
     assert.ok(commands.some(m=>m.reqtype===201));
     assert.equal(feed.status().subscriptions.length,1);
