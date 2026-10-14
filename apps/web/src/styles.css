@@ -1065,3 +1065,76 @@ input {
 .gdd-connection button:disabled {opacity:.48;cursor:not-allowed;}
 .gdd-connection span {font-size:12px;color:#475569;overflow-wrap:anywhere;min-width:0;}
 .gdd-form select {min-height:38px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:8px 10px;color:#1e293b;}
+
+
+/* ── GDD 行情终端：独立深色行情工作区（不影响其他Quant页面） ── */
+.quant-logout{margin:24px 12px 12px;padding:10px 14px;color:#94a3b8;background:transparent;border:1px solid #475569;border-radius:9px;cursor:pointer;font-size:13px;width:calc(100% - 24px)}
+.quant-logout:hover{background:#334155;color:#fff}
+.gdd-terminal{width:100%;min-width:0;color:#e1eafa;background:#0b1627;border:1px solid #263b52;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px #0a142514}
+.gdd-terminal *{box-sizing:border-box}
+.gdd-terminal .q-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;background:#12243b;border-bottom:1px solid #2a3d54;flex-wrap:wrap}
+.gdd-terminal .q-search{display:flex;align-items:center;gap:8px}
+.gdd-terminal .q-logo{color:#c7d9ed;font-size:14px;font-weight:650;margin-right:10px;white-space:nowrap}
+.gdd-terminal .q-search input{width:170px;background:#0b192b;color:#fff;border:1px solid #365270;border-radius:7px;padding:9px 11px;font-size:14px}
+.gdd-terminal .q-search button{background:#2463d9;color:#fff;border:0;border-radius:7px;padding:9px 16px;cursor:pointer}
+.gdd-terminal .q-connection{font-size:12px;display:flex;align-items:center;gap:6px;color:#a0aec3}
+.gdd-terminal .q-connection i{width:8px;height:8px;border-radius:50%;background:#64748b}
+.gdd-terminal .q-connection.connected i{background:#2ecc8e;box-shadow:0 0 9px #2ecc8e80}
+.gdd-terminal .q-connection small{margin-left:8px;color:#8297af}
+.gdd-terminal .q-summary{display:flex;align-items:center;gap:30px;padding:18px 20px;background:#0f2035;border-bottom:1px solid #2a3b50;flex-wrap:wrap}
+.gdd-terminal .q-lead{display:flex;gap:9px;flex-direction:column;min-width:140px}
+.gdd-terminal .q-lead span,.gdd-terminal .q-stat span{font-size:12px;color:#829bb7}
+.gdd-terminal .q-lead strong{font-size:34px;font-variant-numeric:tabular-nums;line-height:1.1}
+.gdd-terminal .q-lead b{font-size:15px;font-weight:600}
+.gdd-terminal .q-stat{display:flex;flex-direction:column;gap:8px}
+.gdd-terminal .q-stat strong{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.gdd-terminal .q-up{color:#ff6674!important}
+.gdd-terminal .q-down{color:#24c8a6!important}
+.gdd-terminal .q-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,275px);min-height:610px}
+.gdd-terminal .q-price-panel{min-width:0;border-right:1px solid #293b52}
+.gdd-terminal .q-tabs{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;background:#0e2036;border-bottom:1px solid #2a3c50;flex-wrap:wrap}
+.gdd-terminal .q-tabs>div{display:flex;flex-wrap:wrap;gap:2px}
+.gdd-terminal .q-tabs button{border:0;color:#a8bad0;background:transparent;padding:8px 11px;border-radius:5px;cursor:pointer;font-size:12px}
+.gdd-terminal .q-tabs button:hover{color:#fff;background:#1d3550}
+.gdd-terminal .q-tabs button.active{color:#7fc1ff;background:#213e5e;font-weight:700}
+.gdd-terminal .q-chart-options{display:flex;gap:4px;align-items:center}
+.gdd-terminal .q-chart-options input{padding:5px 7px;border-radius:6px;border:1px solid #49617a;color:#d6e5f4;background:#10243b;font-size:12px;max-width:150px}
+.gdd-terminal .q-chart-title{display:flex;justify-content:space-between;color:#91a6c1;font-size:12px;padding:12px 18px 0}
+.gdd-terminal .gdd-chart-canvas{width:100%;height:520px}
+.gdd-terminal .q-empty{height:520px;display:flex;align-items:center;justify-content:center;color:#7187a3;font-size:14px;padding:24px;text-align:center}
+.gdd-terminal .q-foot{display:flex;justify-content:space-between;gap:8px;padding:14px 18px;color:#7f93ac;border-top:1px solid #263a51;font-size:11px;flex-wrap:wrap}
+.gdd-terminal .q-sidebar{min-width:0;background:#0e1d30}
+.gdd-terminal .q-section{display:flex;align-items:center;justify-content:space-between;background:#142942;border-bottom:1px solid #2e465e;padding:11px 13px;font-size:12px}
+.gdd-terminal .q-section strong{font-size:13px}
+.gdd-terminal .q-section span{color:#92a7bf;font-size:11px}
+.gdd-terminal .q-depth-head,.gdd-terminal .q-depth-row{display:grid;grid-template-columns:repeat(3,1fr);align-items:center;text-align:right;gap:5px;padding:6px 14px;font-size:12px;font-variant-numeric:tabular-nums}
+.gdd-terminal .q-depth-head{color:#7f98b7;background:#112238;font-size:11px}
+.gdd-terminal .q-depth-row{border-bottom:1px solid #22314966}
+.gdd-terminal .q-depth-row span:first-child{text-align:left}
+.gdd-terminal .q-depth-row strong{font-weight:600}
+.gdd-terminal .q-depth-row span:last-child{color:#b7c7dc}
+.gdd-terminal .q-depth-row:hover{background:#1e344b}
+.gdd-terminal .q-depth-last{display:flex;align-items:center;justify-content:space-between;gap:6px;background:#1a2d43;border-top:1px solid #354f67;border-bottom:1px solid #354f67;padding:10px 14px;font-size:12px}
+.gdd-terminal .q-depth-last strong{font-size:18px;font-variant-numeric:tabular-nums}
+.gdd-terminal .q-depth-last b{font-weight:600}
+.gdd-terminal .q-l2-note{font-size:11px;color:#9eabc2;padding:8px 12px;margin:0;line-height:1.5;background:#102239}
+.gdd-terminal .q-deals{max-height:240px;overflow:auto}
+.gdd-terminal .q-no-deals{padding:20px 10px;text-align:center;font-size:12px;color:#7892ae}
+.gdd-terminal .q-error{color:#ffc9cb;background:#5f222c66;border:1px solid #6b3442;padding:10px 12px;font-size:12px;margin:12px;border-radius:7px;overflow-wrap:anywhere}
+.gdd-terminal .q-disclaimer{margin:0;padding:12px 18px;color:#819ab5;font-size:11px;background:#112338;border-top:1px solid #293d55;line-height:1.6}
+@media (max-width:1100px){
+ .gdd-terminal .q-columns{grid-template-columns:minmax(0,1fr) 235px}
+ .gdd-terminal .q-summary{gap:18px}
+ .gdd-terminal .q-tabs button{padding:7px 8px}
+}
+@media (max-width:750px){
+ .gdd-terminal .q-columns{display:flex;flex-direction:column}
+ .gdd-terminal .q-price-panel{border-right:0}
+ .gdd-terminal .q-sidebar{border-top:1px solid #2a3d52}
+ .gdd-terminal .q-summary{gap:16px;padding:16px}
+ .gdd-terminal .q-lead{min-width:110px}
+ .gdd-terminal .gdd-chart-canvas,.gdd-terminal .q-empty{height:380px}
+ .gdd-terminal .q-depth-row,.gdd-terminal .q-depth-head{padding:7px 18px}
+ .gdd-terminal .q-search input{width:135px}
+ .gdd-terminal .q-logo{display:none}
+}

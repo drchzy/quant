@@ -10,6 +10,7 @@ import { getMarketDataSourceStatus } from './eastmoney.js';
 import { startScheduler } from './scheduler.js';
 import { serveGddMcp } from './gdd-mcp.js';
 import { gddRealtime } from './gdd-realtime.js';
+import { registerWebAuth } from './web-auth.js';
 
 const app = Fastify({
   logger: true
@@ -49,6 +50,7 @@ app.route({
 });
 
 await initDatabase();
+registerWebAuth(app);
 await registerRoutes(app);
 startScheduler();
 

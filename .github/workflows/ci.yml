@@ -74,6 +74,8 @@ jobs:
           mkdir -p ci-web/data
           cp web/.env ci-web/.env
           echo 'BRIDGE_IMPORT_TOKEN="ci-bridge-secret-1234567890"' >> ci-web/.env
+          echo 'WEB_USERNAME="admin"' >> ci-web/.env
+          echo 'WEB_PASSWORD="ci-quant-login-pass-923"' >> ci-web/.env
           echo 'GDD_MCP_TOKEN="ci-test-quant-gdd-mcp-auth-token-1234567890"' >> ci-web/.env
           sed -i 's/SYNC_ENABLED="true"/SYNC_ENABLED="false"/' ci-web/.env
           sed -i 's/AUTO_SELECT_ENABLED="true"/AUTO_SELECT_ENABLED="false"/' ci-web/.env
@@ -92,9 +94,16 @@ jobs:
         run: |
           for i in {1..40}; do
             if curl -fsS http://127.0.0.1:18088/health; then
-              curl -fsS http://127.0.0.1:18088/
-              curl -fsS http://127.0.0.1:18088/api/v1/select/config
-              curl -fsS http://127.0.0.1:18088/api/v1/trading/today
+              # 未登录：静态首页跳转到 /login.html，全部REST接口拒绝访问。
+              test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/)" = "302"
+              test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/api/v1/trading/today)" = "401"
+              test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/api/v1/bridge/status)" = "401"
+              curl -fsS http://127.0.0.1:18088/login.html | grep -q '欢迎回来'
+              # 登录后复用HttpOnly会话，Web/API、选股、交易接口均可用。
+              curl -fsS -c ci-web/cookies -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-quant-login-pass-923"}' http://127.0.0.1:18088/api/v1/web-auth/login | grep -q 'authenticated'
+              curl -fsS -b ci-web/cookies http://127.0.0.1:18088/ | grep -q 'html'
+              curl -fsS -b ci-web/cookies http://127.0.0.1:18088/api/v1/select/config
+              curl -fsS -b ci-web/cookies http://127.0.0.1:18088/api/v1/trading/today
               # MCP 不需要真实GDD账号即可完成 initialize 和 tools/list。
               test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18088/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')" = "401"
               curl -fsS http://127.0.0.1:18088/mcp \
@@ -119,6 +128,8 @@ jobs:
 
       - name: 测试外部采集桥接接口及 DuckDB 入库
         run: node services/market-data/test/bridge-smoke.mjs
+        env:
+          WEB_TEST_PASSWORD: ci-quant-login-pass-923
 
       - name: 输出容器日志
         if: failure()
