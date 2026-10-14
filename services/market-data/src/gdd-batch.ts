@@ -25,23 +25,29 @@ export async function batchGddHistory(codes:string[],period=10,count=120,persist
   const out:Array<{code:string;received:number;persisted:number;sample?:unknown;error?:string}>=[];
   try{
     for(const code of selected){
+      let persisted=0;
       try{
         const rows=await fetchGddKline(code,period,count);
         if(!rows.length)throw Error('GDD未返回有效K线');
-        let persisted=0;
         if(persist){
           // 只处理已经通过GDD表头映射/OHLC验证的行。
           // upsert不触碰stock表的名称或额外估值信息。
-          for(const row of rows){
+          for(let index=0;index<rows.length;index++){
+            const row=rows[index];
+            const previous=index>0?rows[index-1].close:null;
+            const change=previous && previous>0?row.close-previous:null;
+            const pct=change!==null&&previous?change/previous*100:null;
+            const amplitude=previous && previous>0?(row.high-row.low)/previous*100:null;
             if(period===10){
               await run(`INSERT INTO daily_price
-                (code,trade_date,open,close,high,low,volume,amount,pct,change,amplitude,turnover,source,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,'gdd',now())
+                (code,trade_date,open,close,high,low,pre_close,volume,amount,pct,change,amplitude,turnover,source,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,'gdd',now())
                 ON CONFLICT(code,trade_date) DO UPDATE SET
                   open=excluded.open,close=excluded.close,high=excluded.high,low=excluded.low,
-                  volume=excluded.volume,amount=excluded.amount,pct=NULL,change=NULL,
-                  amplitude=NULL,turnover=NULL,source='gdd',updated_at=now()`,
-                [code,row.date.slice(0,10),row.open,row.close,row.high,row.low,row.volume,row.amount]);
+                  pre_close=excluded.pre_close,volume=excluded.volume,amount=excluded.amount,
+                  pct=excluded.pct,change=excluded.change,amplitude=excluded.amplitude,
+                  source='gdd',updated_at=now()`,
+                [code,row.date.slice(0,10),row.open,row.close,row.high,row.low,previous,row.volume,row.amount,pct,change,amplitude]);
             }else{
               await run(`INSERT INTO minute_price
                 (code,period,trade_time,open,close,high,low,volume,amount,pct,change,turnover,source,updated_at)
@@ -57,7 +63,7 @@ export async function batchGddHistory(codes:string[],period=10,count=120,persist
         }
         out.push({code,received:rows.length,persisted,sample:rows.at(-1)});
       }catch(e){
-        out.push({code,received:0,persisted:0,error:e instanceof Error?e.message:'未知错误'});
+        out.push({code,received:0,persisted,error:e instanceof Error?e.message:'未知错误'});
       }
       // 限速：即使是批量任务也不要连续高频打上游。
       await new Promise(r=>setTimeout(r,250));
