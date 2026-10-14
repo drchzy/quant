@@ -11,6 +11,9 @@ test('GDD WS parser understands quote/tick and bounds payload', () => {
   }]}}));
   assert.equal(q.rows.length,1);
   assert.equal(q.rows[0].type,250);
+  const withoutMarket=parseGddWsMessage(JSON.stringify({reqtype:250,data:{symbol:[{code:'300505',price:23}]}}));
+  assert.equal(withoutMarket.rows.length,1);
+  assert.equal(withoutMarket.rows[0].market,1008);
   const t=parseGddWsMessage(JSON.stringify({reqtype:251,data:{tick:[{
     marketId:1008,code:'300505',price:22.1,time:'09:32'
   }]}}));
@@ -44,18 +47,20 @@ test('One backend WS socket multiplexes subscriptions and keeps latest pushed qu
   try{
     await feed.subscribe('300505',1);
     await feed.subscribe('300605',1);
+    await feed.subscribe('300505',4);
     await new Promise(r=>setTimeout(r,100));
     assert.equal(sockets,1);
     const current=feed.read('300505',1);
     assert.equal(current.connected,true);
     assert.equal(current.latest.payload.price,30.12);
     assert.ok(commands.some(m=>m.reqtype===200));
+    assert.ok(commands.some(m=>m.data.some(sub=>sub.type===4)));
     assert.ok(commands.some(m=>m.reqtype===202));
     const unsub=feed.unsubscribe('300505',1);
     await new Promise(r=>setTimeout(r,30));
     assert.equal(unsub.removed,true);
     assert.ok(commands.some(m=>m.reqtype===201));
-    assert.equal(feed.status().subscriptions.length,1);
+    assert.equal(feed.status().subscriptions.length,2);
     assert.equal(feed.events().length>0,true);
   }finally{
     feed.close();
