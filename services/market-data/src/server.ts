@@ -9,6 +9,7 @@ import { registerRoutes } from './routes.js';
 import { getMarketDataSourceStatus } from './eastmoney.js';
 import { startScheduler } from './scheduler.js';
 import { serveGddMcp } from './gdd-mcp.js';
+import { gddRealtime } from './gdd-realtime.js';
 
 const app = Fastify({
   logger: true
@@ -52,6 +53,7 @@ await registerRoutes(app);
 startScheduler();
 
 async function stop() {
+  gddRealtime.close();
   await app.close();
   await closeDatabase();
   process.exit(0);
