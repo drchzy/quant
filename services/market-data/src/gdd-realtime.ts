@@ -52,6 +52,9 @@ export class GddRealtimeFeed {
   private lastError:string|null=null;
   private lastConnected:string|null=null;
   private lastMessage:string|null=null;
+  private lastReqtype:number|null=null;
+  private lastPushCounts:Record<number,number>={};
+  private droppedRows=0;
   private alive=true;
   constructor(private resolver:()=>Promise<string>=()=>getGddServerAddress(36)) {}
 
@@ -94,14 +97,24 @@ export class GddRealtimeFeed {
   }
   private consume(raw: string) {
     let event: ReturnType<typeof parseGddWsMessage>;
-    try{event=parseGddWsMessage(raw);}catch{return;}
+    try { event=parseGddWsMessage(raw); } catch { this.droppedRows++; return; }
     this.lastMessage=new Date().toISOString();
+    this.lastReqtype=event.reqtype;
+    this.lastPushCounts[event.reqtype]=(this.lastPushCounts[event.reqtype] || 0) + 1;
+    if([250,251,252].includes(event.reqtype) && !event.rows.length) this.droppedRows++;
     for(const row of event.rows){
-      const type=event.reqtype===250?1:2;
-      if(!this.subscriptions.has(KEY(row.code,type as QuoteType)))continue;
-      const entry:LiveEntry={...row,receivedAt:this.lastMessage};
-      this.latest.set(KEY(row.code,type as QuoteType),entry);
-      this.recent.push(entry);
+      // type=4 是盘口/Level-2订阅；它可能收到 250快照或252经纪队列。
+      // type=4 的250也入库，避免“明明订阅了盘口却被当成type=1丢弃”。
+      const relevant:QuoteType[] = event.reqtype===250?[1,4]:event.reqtype===251?[2]:[4];
+      for(const type of relevant){
+        if(!this.subscriptions.has(KEY(row.code,type)))continue;
+        const entry:LiveEntry={...row,receivedAt:this.lastMessage};
+        this.latest.set(KEY(row.code,type),entry);
+      }
+      if(this.subscriptions.has(KEY(row.code,event.reqtype===251?2:1)) ||
+         this.subscriptions.has(KEY(row.code,4))) {
+        this.recent.push({ ...row,receivedAt:this.lastMessage });
+      }
     }
     if(this.recent.length>100)this.recent.splice(0,this.recent.length-100);
   }
@@ -210,7 +223,9 @@ export class GddRealtimeFeed {
       connected:this.ws?.readyState===WebSocket.OPEN,
       connecting:!!this.connecting, subscriptions:[...this.subscriptions.values()],
       lastConnected:this.lastConnected,lastMessage:this.lastMessage,
-      lastError:this.lastError, cacheEntries:this.latest.size
+      lastError:this.lastError, cacheEntries:this.latest.size,
+      lastReqtype:this.lastReqtype, pushCounts:{...this.lastPushCounts},
+      droppedRows:this.droppedRows
     };
   }
   private stopConnection(){
