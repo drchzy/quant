@@ -452,8 +452,19 @@ export async function registerRoutes(
       const { code } = request.params as { code: string };
       const { day, auction } = request.query as { day?: string; auction?: string };
       const stockCode = normalizeStockCode(code);
-      const data = await fetchGddTrend(stockCode, day, undefined, auction === '1');
-      return { source: 'gdd', code: stockCode, day: day || null, count: data.length, data };
+      let auctionFallback = false;
+      let data;
+      try {
+        data = await fetchGddTrend(stockCode, day, undefined, auction === '1');
+      } catch(error) {
+        if(auction !== '1')throw error;
+        // 旧协议未必支持09:15～09:25，回退到已验证的09:30请求，
+        // 只留空竞价区，不能因此让上午/下午分时一起消失。
+        data = await fetchGddTrend(stockCode, day);
+        auctionFallback = true;
+      }
+      return { source: 'gdd', code: stockCode, day: day || null, count: data.length,
+        auctionFallback, data };
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
