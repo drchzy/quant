@@ -58,7 +58,7 @@ export function verifyWebPassword(user:string,password:string):boolean {
 export function registerWebAuth(app:FastifyInstance) {
   app.get('/api/v1/web-auth/check',async(req,reply)=>{
     reply.header('Cache-Control','no-store');
-    if(!webAuthEnabled())return reply.code(503).send({error:'请先设置 WEB_PASSWORD（至少8位）'});
+    if(!webAuthEnabled())return reply.code(401).send({error:'请先在 web/.env 设置 WEB_PASSWORD（至少8位）'});
     if(!validateWebSession(req.headers.cookie))return reply.code(401).send({error:'需要登录'});
     return {authenticated:true};
   });
