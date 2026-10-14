@@ -6,9 +6,13 @@ import * as z from 'zod/v4';
 import { GDD_FEATURES, queryGddFeature } from './gdd-features.js';
 import { fetchGddKline, fetchGddTrend, fetchGddTicks, getGddServerAddress } from './gdd.js';
 import { getSourceSettings } from './source-manager.js';
+import { gddRealtime } from './gdd-realtime.js';
+import { batchGddHistory, paperTradePlan } from './gdd-batch.js';
+import { fetchGddF10, fetchGddNews, GDD_F10_PATHS, GDD_NEWS_PATHS } from './gdd-information.js';
 
 // GDD MCP 仅提供只读查询；MCP 不暴露用户凭据或 GDD sessionCode，也不提供任意HTTP转发。
 const MAX_MCP_TEXT = 45_000;
+const quoteType = z.number().int().refine((n) => [1,2].includes(n), '支持的实时类型为1(快照)和2(逐笔)');
 const rateTimes: number[] = [];
 
 function checkToken(value: string | undefined): boolean {
@@ -196,6 +200,81 @@ function createGddMcpServer(): McpServer {
     }
   );
 
+
+  // 上游WS只在 Quant 内部直连；AI 通过MCP轮询内存快照，不持有上游WS连接。
+  // 默认每进程最多30只/类型订阅，客户端断开不导致反复创建上游连接。
+  server.registerTool('gdd_live_subscribe',{
+    title:'Subscribe GDD live quotes',description:'开始订阅GDD实时行情(内部WS)，type=1快照、2逐笔；单容器共享连接，无交易下单操作。',
+    inputSchema:z.object({codes:z.array(z.string().regex(/^\d{6}$/)).min(1).max(10),type:quoteType.default(1)}),
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:true}
+  },async({codes,type}:any)=>{
+    try{
+      countRequest();await ensureGdd();
+      const subscribed=[];
+      for(const code of [...new Set(codes)])subscribed.push(await gddRealtime.subscribe(code,type));
+      return result({subscribed,status:gddRealtime.status()});
+    }catch(e){return {isError:true,content:[{type:'text' as const,text:e instanceof Error?e.message:'订阅失败'}]};}
+  });
+
+  registerReadTool(server,'gdd_live_snapshot',
+    '读取Quant缓存的实时股票快照或逐笔推送；需要先调用gdd_live_subscribe。MCP保持HTTP，后端单连接使用上游WebSocket。',
+    z.object({code:z.string().regex(/^\d{6}$/),type:quoteType.default(1)}),
+    async({code,type}:any)=>gddRealtime.read(code,type));
+
+  registerReadTool(server,'gdd_live_status',
+    '查询后台GDD WS连接、订阅列表、错误状态和最近消息（最多20条，不包含凭据）。',
+    z.object({limit:z.number().int().min(0).max(20).default(0)}),
+    async({limit}:any)=>({status:gddRealtime.status(),events:limit?gddRealtime.events(limit):[]}));
+
+  server.registerTool('gdd_live_unsubscribe',{
+    title:'Unsubscribe GDD live quotes', description:'取消此前由Quant后台建立的一个实时行情订阅。',
+    inputSchema:z.object({code:z.string().regex(/^\d{6}$/),type:quoteType.default(1)}),
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false}
+  },async({code,type}:any)=>{
+    try{countRequest();await ensureGdd();return result(gddRealtime.unsubscribe(code,type));}
+    catch(e){return {isError:true,content:[{type:'text' as const,text:e instanceof Error?e.message:'取消失败'}]};}
+  });
+
+  // persist=false只预览；persist=true显式入库，避免AI无意覆盖量化基础数据。
+  server.registerTool('gdd_batch_kline',{
+    title:'Batch GDD K-line history / explicit DuckDB import',
+    description:'批量采集1-10只股票K线，count最多200；persist=false仅预览，true才落库；不是自动交易。',
+    inputSchema:z.object({
+      codes:z.array(z.string().regex(/^\d{6}$/)).min(1).max(10),
+      period:z.number().int().refine(n=>[2,3,4,5,6,7,10].includes(n),'不支持该入库周期').default(10),
+      count:z.number().int().min(1).max(200).default(120),
+      persist:z.boolean().default(false)
+    }),
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:true}
+  },async({codes,period,count,persist}:any)=>{
+    try{countRequest();await ensureGdd();return result(await batchGddHistory(codes,period,count,persist));}
+    catch(e){return {isError:true,content:[{type:'text' as const,text:e instanceof Error?e.message:'批量同步失败'}]};}
+  });
+
+  registerReadTool(server,'gdd_simulate_trade_plan',
+    '只生成A股T+1模拟交易计划和100股整数倍仓位/风险收益测算，不会发送真实券商订单。',
+    z.object({
+      code:z.string().regex(/^\d{6}$/),
+      entry:z.number().positive(),stop:z.number().positive(),target:z.number().positive(),
+      capital:z.number().positive(),maxPositionPct:z.number().positive().max(50).default(50)
+    }),async(args:any)=>paperTradePlan(args));
+
+  registerReadTool(server,'gdd_get_f10',
+    '查询GDD旧业务F10财报：公司资料、资产负债、现金流、盈利能力、利润表、概要。需额外配置准确的GDD_INFO_BASE_URL，旧接口字段尚待实测。',
+    z.object({code:z.string().regex(/^\d{6}$/),
+      section:z.enum(Object.keys(GDD_F10_PATHS) as [keyof typeof GDD_F10_PATHS,...(keyof typeof GDD_F10_PATHS)[]]).default('profile')}),
+    async({code,section}:any)=>fetchGddF10(code,section));
+
+  registerReadTool(server,'gdd_get_news',
+    '查询GDD旧业务新闻分类、新闻列表、新闻详情、分组新闻。需配置准确GDD_INFO_BASE_URL；请求方法/响应实体待实测。',
+    z.object({
+      section:z.enum(Object.keys(GDD_NEWS_PATHS) as [keyof typeof GDD_NEWS_PATHS,...(keyof typeof GDD_NEWS_PATHS)[]]).default('news'),
+      category:z.string().max(40).optional(),
+      id:z.string().max(64).optional(),
+      page:z.number().int().min(1).max(500).default(1),
+      pageSize:z.number().int().min(1).max(50).default(20)
+    }),
+    async({section,category,id,page,pageSize}:any)=>fetchGddNews(section,{category,id,page,pageSize}));
   return server;
 }
 
