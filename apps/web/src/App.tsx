@@ -1870,6 +1870,7 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <button className="quant-logout" onClick={async () => { try { await fetch("/api/v1/web-auth/logout", {method:"POST"}); } finally { window.location.assign("/login.html"); } }}>退出登录</button>
       </aside>
 
       <main>
