@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
 import { fetchGddTrend, fetchGddTicks, fetchGddKline, getGddServerAddress } from './gdd.js';
 import { GDD_FEATURES, queryGddFeature } from './gdd-features.js';
+import { gddRealtime } from './gdd-realtime.js';
 import { importBridgeRows, getBridgeCounts } from './external-bridge.js';
 import {
   getAiStock,
@@ -202,6 +203,78 @@ export async function registerRoutes(
 
   // 历史分时专用接口：仅在 GDD 已由用户启用时可用，避免绕过数据源开关。
   // 只读插件功能目录：前端无需知道 ReqType 的构造细节。
+  // Web 行情终端：浏览器每2秒读取内存快照，不会每轮触发上游HTTP或新建WS。
+  // WS只有后端直接连接动态发现的 serverType=36，上游不泄漏给前端。
+  app.post('/api/v1/gdd/terminal/subscribe', {bodyLimit:2048}, async (request, reply) => {
+    try {
+      const gdd = (await getSourceSettings()).find(item => item.id === 'gdd');
+      if (!gdd?.enabled || !gdd.available) return reply.code(503).send({error:'请先配置并启用GDD行情源'});
+      if (!rateLimitGdd()) return reply.code(429).send({error:'订阅请求过于频繁'});
+      const {code} = request.body as {code?:string};
+      const stockCode=normalizeStockCode(String(code||''));
+      const quote=await gddRealtime.subscribe(stockCode,1);
+      // 逐笔订阅失败不会让已成功的L1行情快照被取消。
+      let tickError:string|null=null;
+      try {await gddRealtime.subscribe(stockCode,2);}
+      catch(e) {tickError=e instanceof Error?e.message:'逐笔订阅失败';}
+      return {code:stockCode,quote,tickError};
+    }catch(error) {return reply.code(502).send({error:error instanceof Error?error.message:'GDD实时订阅失败'});}
+  });
+
+  app.post('/api/v1/gdd/terminal/unsubscribe',{bodyLimit:2048},async(request,reply)=>{
+    try {
+      const {code}=request.body as {code?:string};
+      const stockCode=normalizeStockCode(String(code||''));
+      gddRealtime.unsubscribe(stockCode,1);
+      gddRealtime.unsubscribe(stockCode,2);
+      return {code:stockCode,removed:true};
+    }catch(e){return reply.code(400).send({error:e instanceof Error?e.message:'取消订阅失败'});}
+  });
+
+  app.get('/api/v1/gdd/terminal/:code', async(request,reply)=>{
+    try {
+      reply.header('Cache-Control','no-store');
+      const gdd=(await getSourceSettings()).find(item=>item.id==='gdd');
+      if(!gdd?.enabled || !gdd.available)return reply.code(503).send({error:'请先配置并启用GDD行情源'});
+      const {code}=request.params as {code:string};
+      const stockCode=normalizeStockCode(code);
+      const quote=gddRealtime.read(stockCode,1);
+      const tick=gddRealtime.read(stockCode,2);
+      const source=(quote.latest?.payload||{}) as Record<string,unknown>;
+      const n=(v:unknown):number|null=>{
+        if(v===null || v===undefined || v==='')return null;
+        const num=Number(v);
+        return Number.isFinite(num)?num:null;
+      };
+      const asks=Array.from({length:10},(_,i)=>({
+        level:i+1,price:n(source['sellPrice'+i]),volume:n(source['sellVolume'+i]),
+        broker:n(source['sellBroker'+i])
+      }));
+      const bids=Array.from({length:10},(_,i)=>({
+        level:i+1,price:n(source['buyPrice'+i]),volume:n(source['buyVolume'+i]),
+        broker:n(source['buyBroker'+i])
+      }));
+      const validDepth=Math.max(
+        bids.filter(item=>item.price!==null).length,
+        asks.filter(item=>item.price!==null).length
+      );
+      const deals=gddRealtime.events(100).filter(item=>item.code===stockCode&&item.type===251).slice(0,30).map(item=>({
+        receivedAt:item.receivedAt,
+        ...(item.payload&&typeof item.payload==='object'?item.payload as Record<string,unknown>:{})
+      }));
+      return {
+        code:stockCode,quote,tick,connected:gddRealtime.status().connected,
+        lastPrice:n(source.price),previousClose:n(source.lastClose),
+        open:n(source.open),high:n(source.high),low:n(source.low),
+        average:n(source.average),volume:n(source.volume),amount:n(source.amount),
+        riseRate:n(source.riseRate),time:source.time??null,
+        depth:{levelCount:validDepth,l2Available:validDepth>5,
+          bids,asks,source:'GDD_WS_250'},
+        deals,serverTime:gddRealtime.status().lastMessage
+      };
+    }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'行情查询失败'});}
+  });
+
   app.get('/api/v1/gdd/features', async () => ({
     features: GDD_FEATURES.map(({ id, title, group, description, reqtype, fields }) =>
       ({ id, title, group, description, reqtype, fields })),
