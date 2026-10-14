@@ -205,6 +205,7 @@ export async function registerRoutes(
   // 只读插件功能目录：前端无需知道 ReqType 的构造细节。
   // Web 行情终端：浏览器每2秒读取内存快照，不会每轮触发上游HTTP或新建WS。
   // WS只有后端直接连接动态发现的 serverType=36，上游不泄漏给前端。
+  // 页面订阅行情快照(1)、逐笔(2)、盘口(4)。4是GDD文档中单独的盘口订阅类型。
   app.post('/api/v1/gdd/terminal/subscribe', {bodyLimit:2048}, async (request, reply) => {
     try {
       const gdd = (await getSourceSettings()).find(item => item.id === 'gdd');
@@ -213,26 +214,26 @@ export async function registerRoutes(
       const {code} = request.body as {code?:string};
       const stockCode=normalizeStockCode(String(code||''));
       const quote=await gddRealtime.subscribe(stockCode,1);
-      // 逐笔订阅失败不会让已成功的L1行情快照被取消。
-      let tickError:string|null=null;
-      try {await gddRealtime.subscribe(stockCode,2);}
-      catch(e) {tickError=e instanceof Error?e.message:'逐笔订阅失败';}
-      return {code:stockCode,quote,tickError};
-    }catch(error) {return reply.code(502).send({error:error instanceof Error?error.message:'GDD实时订阅失败'});}
+      const errors:Record<string,string>={};
+      for(const type of [2,4] as const){
+        try{await gddRealtime.subscribe(stockCode,type);}
+        catch(error){errors[type===2?'tick':'depth']=error instanceof Error?error.message:'订阅失败';}
+      }
+      return {code:stockCode,quote,errors,depthSubscribed:gddRealtime.read(stockCode,4).subscribed};
+    }catch(error){return reply.code(502).send({error:error instanceof Error?error.message:'GDD实时订阅失败'});}
   });
 
   app.post('/api/v1/gdd/terminal/unsubscribe',{bodyLimit:2048},async(request,reply)=>{
-    try {
+    try{
       const {code}=request.body as {code?:string};
       const stockCode=normalizeStockCode(String(code||''));
-      gddRealtime.unsubscribe(stockCode,1);
-      gddRealtime.unsubscribe(stockCode,2);
+      for(const type of [1,2,4] as const)gddRealtime.unsubscribe(stockCode,type);
       return {code:stockCode,removed:true};
-    }catch(e){return reply.code(400).send({error:e instanceof Error?e.message:'取消订阅失败'});}
+    }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'取消订阅失败'});}
   });
 
   app.get('/api/v1/gdd/terminal/:code', async(request,reply)=>{
-    try {
+    try{
       reply.header('Cache-Control','no-store');
       const gdd=(await getSourceSettings()).find(item=>item.id==='gdd');
       if(!gdd?.enabled || !gdd.available)return reply.code(503).send({error:'请先配置并启用GDD行情源'});
@@ -240,39 +241,125 @@ export async function registerRoutes(
       const stockCode=normalizeStockCode(code);
       const quote=gddRealtime.read(stockCode,1);
       const tick=gddRealtime.read(stockCode,2);
+      const book=gddRealtime.read(stockCode,4);
       const source=(quote.latest?.payload||{}) as Record<string,unknown>;
+      const bookSource=(book.latest?.payload||{}) as Record<string,unknown>;
       const n=(v:unknown):number|null=>{
-        if(v===null || v===undefined || v==='')return null;
+        if(v===null||v===undefined||v==='')return null;
         const num=Number(v);
         return Number.isFinite(num)?num:null;
       };
-      const asks=Array.from({length:10},(_,i)=>({
-        level:i+1,price:n(source['sellPrice'+i]),volume:n(source['sellVolume'+i]),
-        broker:n(source['sellBroker'+i])
-      }));
-      const bids=Array.from({length:10},(_,i)=>({
-        level:i+1,price:n(source['buyPrice'+i]),volume:n(source['buyVolume'+i]),
-        broker:n(source['buyBroker'+i])
-      }));
-      const validDepth=Math.max(
-        bids.filter(item=>item.price!==null).length,
-        asks.filter(item=>item.price!==null).length
+      const readSide=(payload:Record<string,unknown>,side:'buy'|'sell')=>{
+        const cap=side==='buy'?'Buy':'Sell';
+        const prices=(payload[side+'Price'] ?? payload[cap+'Price']);
+        const volumes=(payload[side+'Volume'] ?? payload[cap+'Volume']);
+        const brokers=(payload[side+'Broker'] ?? payload[cap+'Broker']);
+        return Array.from({length:10},(_,i)=>{
+          const rawPrice=Array.isArray(prices)?prices[i]:payload[side+'Price'+i]??payload[cap+'Price'+i];
+          const rawVolume=Array.isArray(volumes)?volumes[i]:payload[side+'Volume'+i]??payload[cap+'Volume'+i];
+          const rawBroker=Array.isArray(brokers)?brokers[i]:payload[side+'Broker'+i]??payload[cap+'Broker'+i];
+          const price=n(rawPrice);
+          return {level:i+1,price:price!==null&&price>0?price:null,volume:n(rawVolume),broker:n(rawBroker)};
+        });
+      };
+      const depthCount=(payload:Record<string,unknown>)=>Math.min(
+        readSide(payload,'buy').filter(item=>item.price!==null).length,
+        readSide(payload,'sell').filter(item=>item.price!==null).length
+      );
+      // 单独盘口type4可能只含十档不含最新价，不能用它覆盖type1的价格字段。
+      const bookHasDepth=depthCount(bookSource)>depthCount(source);
+      const depthSource=bookHasDepth?bookSource:source;
+      const asks=readSide(depthSource,'sell'),bids=readSide(depthSource,'buy');
+      const sideCount=Math.min(
+        bids.filter(item=>item.price!==null).length,asks.filter(item=>item.price!==null).length
       );
       const deals=gddRealtime.events(100).filter(item=>item.code===stockCode&&item.type===251).slice(0,30).map(item=>({
         receivedAt:item.receivedAt,
         ...(item.payload&&typeof item.payload==='object'?item.payload as Record<string,unknown>:{})
       }));
+      const status=gddRealtime.status();
       return {
-        code:stockCode,quote,tick,connected:gddRealtime.status().connected,
-        lastPrice:n(source.price),previousClose:n(source.lastClose),
+        code:stockCode,quote,tick,book,connected:status.connected,
+        lastPrice:n(source.price??source.Price),previousClose:n(source.lastClose??source.LastClose),
         open:n(source.open),high:n(source.high),low:n(source.low),
         average:n(source.average),volume:n(source.volume),amount:n(source.amount),
         riseRate:n(source.riseRate),time:source.time??null,
-        depth:{levelCount:validDepth,l2Available:validDepth>5,
-          bids,asks,source:'GDD_WS_250'},
-        deals,serverTime:gddRealtime.status().lastMessage
+        depth:{
+          levelCount:sideCount,l2Available:sideCount>=10,
+          bids,asks,source:bookHasDepth?'GDD_WS_TYPE4':'GDD_WS_250',
+          bookSubscribed:book.subscribed,bookReceived:!!book.latest,
+          lastReceivedAt:book.latest?.receivedAt??quote.latest?.receivedAt??null
+        },
+        deals,serverTime:status.lastMessage,
+        diagnostics:{
+          connected:status.connected,subscribedTypes:[1,2,4].filter(t=>status.subscriptions.some(v=>v.code===stockCode&&v.type===t)),
+          lastMessage:status.lastMessage,lastReqtype:status.lastReqtype,
+          pushCounts:status.pushCounts,droppedRows:status.droppedRows,
+          lastError:status.lastError,
+          quoteFields:Object.keys(source).slice(0,40),
+          bookFields:Object.keys(bookSource).slice(0,40)
+        }
       };
     }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'行情查询失败'});}
+  });
+
+  // 证券名称来自Quant本地stock表；昨收优先行情快照，缺失再从历史收盘价推导。
+  // 只在切换股票时调用，不允许前端2秒轮询触发历史HTTP网关。
+  app.get('/api/v1/gdd/terminal/profile/:code', async(request,reply)=>{
+    try{
+      const {code}=request.params as {code:string};
+      const stockCode=normalizeStockCode(code);
+      const details=await getStock(stockCode).catch(()=>null) as Record<string,unknown>|null;
+      const toN=(value:unknown):number|null=>{
+        if(value===null||value===undefined||value==='')return null;
+        const n=Number(value);return Number.isFinite(n)&&n>0?n:null;
+      };
+      const shanghaiDate=new Date(Date.now()+8*3600_000).toISOString().slice(0,10);
+      let candles:Array<{date:string;open:number;close:number;high:number;low:number}>=[];
+      let historyError:string|null=null;
+      try{
+        candles=await fetchGddKline(stockCode,10,5);
+      }catch(error){historyError=error instanceof Error?error.message:'GDD历史K线不可用';}
+      const dayOf=(d:unknown)=>String(d??'').slice(0,10);
+      let last=candles.at(-1);
+      let day=last?dayOf(last.date):dayOf(details?.trade_date);
+      let sameDay=day===shanghaiDate;
+      const sorted=candles.filter(c=>dayOf(c.date)<=shanghaiDate);
+      last=sorted.at(-1);
+      day=last?dayOf(last.date):dayOf(details?.trade_date);
+      sameDay=day===shanghaiDate;
+      // 昨收=当日K前一个交易日收盘；无当日K时=最新可用收盘
+      const previousClose=sorted.length
+        ? toN((sameDay?sorted.at(-2):last)?.close)
+        : (sameDay?toN(details?.pre_close):toN(details?.close));
+      const dayBar=sameDay?last:null;
+      let quoteFallback:Record<string,unknown>|null=null;
+      let quoteProvider:string|null=null;
+      // 本地stock表可能尚未同步该个股，此时查询已启用的新浪/腾讯等行情源。
+      // 这是仅在切换证券时的一次性HTTP查询，不在每2秒的WS轮询中重复。
+      if(!details?.name || !dayBar) {
+        try {
+          const result=await getStockQuote(stockCode);
+          quoteFallback=result.data as Record<string,unknown>|null;
+          quoteProvider=result.source;
+        }catch { /* 无有效数据源时仍保留GDD/本地历史的降级结果 */ }
+      }
+      const fallbackName=String(quoteFallback?.name??'').trim();
+      const quotePrice=toN(quoteFallback?.price);
+      const liveCandidate=quoteProvider!==null&&quoteProvider!=='duckdb';
+      return {
+        code:stockCode,name:String(details?.name||'').trim()||fallbackName||null,
+        nameSource:details?.name?'Quant股票基础表':fallbackName?quoteProvider:null,
+        previousClose:toN(liveCandidate?quoteFallback?.preClose:null)??previousClose,
+        open:toN(liveCandidate?quoteFallback?.open:null)??toN(dayBar?.open??(sameDay?details?.open:null)),
+        high:toN(liveCandidate?quoteFallback?.high:null)??toN(dayBar?.high??(sameDay?details?.high:null)),
+        low:toN(liveCandidate?quoteFallback?.low:null)??toN(dayBar?.low??(sameDay?details?.low:null)),
+        close:quotePrice??toN(last?.close??details?.close),
+        asOf:day||null,sessionDay:shanghaiDate,
+        priceSource:liveCandidate?('行情源 '+quoteProvider):dayBar?'GDD日K':details?'Quant本地日K':'无',
+        historyError
+      };
+    }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'证券资料获取失败'});}
   });
 
   app.get('/api/v1/gdd/features', async () => ({
@@ -363,10 +450,21 @@ export async function registerRoutes(
       const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');
       if (!gdd?.enabled) return reply.code(503).send({ error: '请先在数据源管理中启用 GDD' });
       const { code } = request.params as { code: string };
-      const { day } = request.query as { day?: string };
+      const { day, auction } = request.query as { day?: string; auction?: string };
       const stockCode = normalizeStockCode(code);
-      const data = await fetchGddTrend(stockCode, day);
-      return { source: 'gdd', code: stockCode, day: day || null, count: data.length, data };
+      let auctionFallback = false;
+      let data;
+      try {
+        data = await fetchGddTrend(stockCode, day, undefined, auction === '1');
+      } catch(error) {
+        if(auction !== '1')throw error;
+        // 旧协议未必支持09:15～09:25，回退到已验证的09:30请求，
+        // 只留空竞价区，不能因此让上午/下午分时一起消失。
+        data = await fetchGddTrend(stockCode, day);
+        auctionFallback = true;
+      }
+      return { source: 'gdd', code: stockCode, day: day || null, count: data.length,
+        auctionFallback, data };
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }

@@ -382,13 +382,13 @@ export async function fetchGddTicks(code: string, day: string, signal?: AbortSig
   return items;
 }
 
-export async function fetchGddTrend(code: string, day?: string, signal?: AbortSignal): Promise<GddTrendRow[]> {
+export async function fetchGddTrend(code: string, day?: string, signal?: AbortSignal, includeAuction = false): Promise<GddTrendRow[]> {
   const market = gddMarketCode(code);
   const now = new Date(Date.now() + 8 * 3600_000);
   const date = day || now.toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('GDD 日期必须为 YYYY-MM-DD');
   const response = await requestQuote(152, 152, {
-    market, code, timetype: 0, timevalue0: 90, timevalue1: 420,
+    market, code, timetype: 0, timevalue0: includeAuction ? 75 : 90, timevalue1: 420,
     day: date + ' 0:0:0'
   }, signal);
   return parseGddTrend(response, date);

@@ -30,9 +30,15 @@ export function parseGddWsMessage(raw: string): { reqtype:number; rows: Array<{ 
   const rows: Array<{code:string;market:number;type:PushType;payload:unknown}>=[];
   for(const item of values.slice(0,200)){
     if(!item || typeof item!=='object')continue;
-    const code=String(item.code??item.Code??'');
-    const market=Number(item.market??item.marketId??item.Market??-1);
-    if(!/^\d{6}$/.test(code) || !Number.isFinite(market))continue;
+    const code=String(item.code??item.Code??item.symbol??'');
+    if(!/^\d{6}$/.test(code))continue;
+    const rawMarket=item.market??item.marketId??item.Market;
+    // 若WS推送没有 market 字段，但证券代码明确，可用已验证的股票市场映射；
+    // 不允许猜测缺少证券代码的行情属于哪只股票。
+    let market:number;
+    try { market=rawMarket===undefined?gddMarketCode(code):Number(rawMarket); }
+    catch {continue;}
+    if(!Number.isFinite(market))continue;
     rows.push({code,market,type:reqtype as PushType,payload:item});
   }
   return {reqtype,rows};
@@ -52,6 +58,9 @@ export class GddRealtimeFeed {
   private lastError:string|null=null;
   private lastConnected:string|null=null;
   private lastMessage:string|null=null;
+  private lastReqtype:number|null=null;
+  private lastPushCounts:Record<number,number>={};
+  private droppedRows=0;
   private alive=true;
   constructor(private resolver:()=>Promise<string>=()=>getGddServerAddress(36)) {}
 
@@ -94,14 +103,24 @@ export class GddRealtimeFeed {
   }
   private consume(raw: string) {
     let event: ReturnType<typeof parseGddWsMessage>;
-    try{event=parseGddWsMessage(raw);}catch{return;}
+    try { event=parseGddWsMessage(raw); } catch { this.droppedRows++; return; }
     this.lastMessage=new Date().toISOString();
+    this.lastReqtype=event.reqtype;
+    this.lastPushCounts[event.reqtype]=(this.lastPushCounts[event.reqtype] || 0) + 1;
+    if([250,251,252].includes(event.reqtype) && !event.rows.length) this.droppedRows++;
     for(const row of event.rows){
-      const type=event.reqtype===250?1:2;
-      if(!this.subscriptions.has(KEY(row.code,type as QuoteType)))continue;
-      const entry:LiveEntry={...row,receivedAt:this.lastMessage};
-      this.latest.set(KEY(row.code,type as QuoteType),entry);
-      this.recent.push(entry);
+      // type=4 是盘口/Level-2订阅；它可能收到 250快照或252经纪队列。
+      // type=4 的250也入库，避免“明明订阅了盘口却被当成type=1丢弃”。
+      const relevant:QuoteType[] = event.reqtype===250?[1,4]:event.reqtype===251?[2]:[4];
+      for(const type of relevant){
+        if(!this.subscriptions.has(KEY(row.code,type)))continue;
+        const entry:LiveEntry={...row,receivedAt:this.lastMessage};
+        this.latest.set(KEY(row.code,type),entry);
+      }
+      if(this.subscriptions.has(KEY(row.code,event.reqtype===251?2:1)) ||
+         this.subscriptions.has(KEY(row.code,4))) {
+        this.recent.push({ ...row,receivedAt:this.lastMessage });
+      }
     }
     if(this.recent.length>100)this.recent.splice(0,this.recent.length-100);
   }
@@ -210,7 +229,9 @@ export class GddRealtimeFeed {
       connected:this.ws?.readyState===WebSocket.OPEN,
       connecting:!!this.connecting, subscriptions:[...this.subscriptions.values()],
       lastConnected:this.lastConnected,lastMessage:this.lastMessage,
-      lastError:this.lastError, cacheEntries:this.latest.size
+      lastError:this.lastError, cacheEntries:this.latest.size,
+      lastReqtype:this.lastReqtype, pushCounts:{...this.lastPushCounts},
+      droppedRows:this.droppedRows
     };
   }
   private stopConnection(){
