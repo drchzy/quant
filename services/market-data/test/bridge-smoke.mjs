@@ -2,10 +2,17 @@ import assert from 'node:assert/strict';
 
 const base = process.env.BRIDGE_TEST_BASE || 'http://127.0.0.1:18088';
 const token = process.env.BRIDGE_TEST_TOKEN || 'ci-bridge-secret-1234567890';
+const loginRes = await fetch(base + '/api/v1/web-auth/login', {
+  method: 'POST', headers: {'Content-Type':'application/json'},
+  body: JSON.stringify({username:'admin',password:process.env.WEB_TEST_PASSWORD || 'ci-quant-login-pass-923'})
+});
+assert.equal(loginRes.status,200,'Web login must succeed');
+const cookie = loginRes.headers.get('set-cookie')?.split(';')[0];
+assert.ok(cookie,'Web login must set a session cookie');
 async function check(method, path, payload, providedToken = token) {
   const res = await fetch(base + path, {
     method,
-    headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': providedToken },
+    headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': providedToken, 'Cookie': cookie },
     body: payload ? JSON.stringify(payload) : undefined
   });
   const json = await res.json().catch(() => ({}));
@@ -42,9 +49,9 @@ assert.equal(counts.status, 200);
 for (const name of ['daily_price', 'minute_price', 'intraday_trend', 'sector', 'market_index']) {
   assert.ok(counts.body.counts[name] >= 1, name + ' 未入库');
 }
-const market = await fetch(base + '/api/v1/market/overview?live=false').then(x => x.json());
+const market = await fetch(base + '/api/v1/market/overview?live=false',{headers:{Cookie:cookie}}).then(x => x.json());
 assert.ok(market.indexes.find(x => x.code === '000001')?.quote?.price === 4000, '导入指数必须被市场总览读取');
-const page = await fetch(base + '/bridge.html');
+const page = await fetch(base + '/bridge.html',{headers:{Cookie:cookie}});
 assert.equal(page.status, 200);
 assert.match(await page.text(), /外部行情采集桥接/);
 
