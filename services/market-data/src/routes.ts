@@ -333,15 +333,30 @@ export async function registerRoutes(
         ? toN((sameDay?sorted.at(-2):last)?.close)
         : (sameDay?toN(details?.pre_close):toN(details?.close));
       const dayBar=sameDay?last:null;
+      let quoteFallback:Record<string,unknown>|null=null;
+      let quoteProvider:string|null=null;
+      // 本地stock表可能尚未同步该个股，此时查询已启用的新浪/腾讯等行情源。
+      // 这是仅在切换证券时的一次性HTTP查询，不在每2秒的WS轮询中重复。
+      if(!details?.name || !dayBar) {
+        try {
+          const result=await getStockQuote(stockCode);
+          quoteFallback=result.data as Record<string,unknown>|null;
+          quoteProvider=result.source;
+        }catch { /* 无有效数据源时仍保留GDD/本地历史的降级结果 */ }
+      }
+      const fallbackName=String(quoteFallback?.name??'').trim();
+      const quotePrice=toN(quoteFallback?.price);
+      const liveCandidate=quoteProvider!==null&&quoteProvider!=='duckdb';
       return {
-        code:stockCode,name:String(details?.name||'').trim()||null,
-        nameSource:details?.name?'Quant股票基础表':null,
-        previousClose,open:toN(dayBar?.open??(sameDay?details?.open:null)),
-        high:toN(dayBar?.high??(sameDay?details?.high:null)),
-        low:toN(dayBar?.low??(sameDay?details?.low:null)),
-        close:toN(last?.close??details?.close),
+        code:stockCode,name:String(details?.name||'').trim()||fallbackName||null,
+        nameSource:details?.name?'Quant股票基础表':fallbackName?quoteProvider:null,
+        previousClose:toN(liveCandidate?quoteFallback?.preClose:null)??previousClose,
+        open:toN(liveCandidate?quoteFallback?.open:null)??toN(dayBar?.open??(sameDay?details?.open:null)),
+        high:toN(liveCandidate?quoteFallback?.high:null)??toN(dayBar?.high??(sameDay?details?.high:null)),
+        low:toN(liveCandidate?quoteFallback?.low:null)??toN(dayBar?.low??(sameDay?details?.low:null)),
+        close:quotePrice??toN(last?.close??details?.close),
         asOf:day||null,sessionDay:shanghaiDate,
-        priceSource:dayBar?'GDD日K':details?'Quant本地日K':'无',
+        priceSource:liveCandidate?('行情源 '+quoteProvider):dayBar?'GDD日K':details?'Quant本地日K':'无',
         historyError
       };
     }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'证券资料获取失败'});}
