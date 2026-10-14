@@ -17,7 +17,7 @@
     "eastmoney-data-sdk": "^1.0.5",
     "fastify": "^5.6.1",
     "node-cron": "^4.2.1",
-    "@modelcontextprotocol/node": "^2.3.1",
+    "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/server": "^2.3.1",
     "zod": "^4.1.0"
   },
