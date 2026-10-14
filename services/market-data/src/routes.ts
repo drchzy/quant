@@ -303,6 +303,50 @@ export async function registerRoutes(
     }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'行情查询失败'});}
   });
 
+  // 证券名称来自Quant本地stock表；昨收优先行情快照，缺失再从历史收盘价推导。
+  // 只在切换股票时调用，不允许前端2秒轮询触发历史HTTP网关。
+  app.get('/api/v1/gdd/terminal/profile/:code', async(request,reply)=>{
+    try{
+      const {code}=request.params as {code:string};
+      const stockCode=normalizeStockCode(code);
+      const details=await getStock(stockCode).catch(()=>null) as Record<string,unknown>|null;
+      const toN=(value:unknown):number|null=>{
+        if(value===null||value===undefined||value==='')return null;
+        const n=Number(value);return Number.isFinite(n)&&n>0?n:null;
+      };
+      const shanghaiDate=new Date(Date.now()+8*3600_000).toISOString().slice(0,10);
+      let candles:Array<{date:string;open:number;close:number;high:number;low:number}>=[];
+      let historyError:string|null=null;
+      try{
+        candles=await fetchGddKline(stockCode,10,5);
+      }catch(error){historyError=error instanceof Error?error.message:'GDD历史K线不可用';}
+      const dayOf=(d:unknown)=>String(d??'').slice(0,10);
+      let last=candles.at(-1);
+      let day=last?dayOf(last.date):dayOf(details?.trade_date);
+      let sameDay=day===shanghaiDate;
+      const sorted=candles.filter(c=>dayOf(c.date)<=shanghaiDate);
+      last=sorted.at(-1);
+      day=last?dayOf(last.date):dayOf(details?.trade_date);
+      sameDay=day===shanghaiDate;
+      // 昨收=当日K前一个交易日收盘；无当日K时=最新可用收盘
+      const previousClose=sorted.length
+        ? toN((sameDay?sorted.at(-2):last)?.close)
+        : (sameDay?toN(details?.pre_close):toN(details?.close));
+      const dayBar=sameDay?last:null;
+      return {
+        code:stockCode,name:String(details?.name||'').trim()||null,
+        nameSource:details?.name?'Quant股票基础表':null,
+        previousClose,open:toN(dayBar?.open??(sameDay?details?.open:null)),
+        high:toN(dayBar?.high??(sameDay?details?.high:null)),
+        low:toN(dayBar?.low??(sameDay?details?.low:null)),
+        close:toN(last?.close??details?.close),
+        asOf:day||null,sessionDay:shanghaiDate,
+        priceSource:dayBar?'GDD日K':details?'Quant本地日K':'无',
+        historyError
+      };
+    }catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'证券资料获取失败'});}
+  });
+
   app.get('/api/v1/gdd/features', async () => ({
     features: GDD_FEATURES.map(({ id, title, group, description, reqtype, fields }) =>
       ({ id, title, group, description, reqtype, fields })),
@@ -391,9 +435,9 @@ export async function registerRoutes(
       const gdd = (await getSourceSettings()).find((item) => item.id === 'gdd');
       if (!gdd?.enabled) return reply.code(503).send({ error: '请先在数据源管理中启用 GDD' });
       const { code } = request.params as { code: string };
-      const { day } = request.query as { day?: string };
+      const { day, auction } = request.query as { day?: string; auction?: string };
       const stockCode = normalizeStockCode(code);
-      const data = await fetchGddTrend(stockCode, day);
+      const data = await fetchGddTrend(stockCode, day, undefined, auction === '1');
       return { source: 'gdd', code: stockCode, day: day || null, count: data.length, data };
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
