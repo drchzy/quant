@@ -9,10 +9,10 @@ const loginRes = await fetch(base + '/api/v1/web-auth/login', {
 assert.equal(loginRes.status,200,'Web login must succeed');
 const cookie = loginRes.headers.get('set-cookie')?.split(';')[0];
 assert.ok(cookie,'Web login must set a session cookie');
-async function check(method, path, payload, providedToken = token) {
+async function check(method, path, payload, providedToken = token, webCookie = true) {
   const res = await fetch(base + path, {
     method,
-    headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': providedToken, 'Cookie': cookie },
+    headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': providedToken, ...(webCookie ? {'Cookie':cookie} : {}) },
     body: payload ? JSON.stringify(payload) : undefined
   });
   const json = await res.json().catch(() => ({}));
@@ -21,8 +21,13 @@ async function check(method, path, payload, providedToken = token) {
 
 const denied = await check('POST', '/api/v1/bridge/import', {
   type: 'index', rows: [{ code: '000001', name: '上证指数', price: 4000 }]
-}, 'invalid');
+}, 'invalid', false);
 assert.equal(denied.status, 401, '错误令牌必须被拒绝');
+
+const standalone = await check('POST', '/api/v1/bridge/import', {
+  type:'index',rows:[{code:'000001',name:'上证指数',price:4000}]
+},token,false);
+assert.equal(standalone.status,200,'外部机器只有Bridge Token时也应能导入');
 
 const records = [
   { type: 'snapshot', row: { code: '600186', name: '莲花控股', tradeDate: '2026-10-08', close: 12.5, open: 12.2, pct: 2.46 } },
