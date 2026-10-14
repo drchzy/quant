@@ -116,7 +116,7 @@ function createGddMcpServer(): McpServer {
     '查询指定A股股票的GDD日K/周K/月K或5/15/30/60分钟K线；code是6位证券代码，period=10为日K，2为5分钟。',
     z.object({
       code: z.string().regex(/^\d{6}$/).describe('六位A股证券代码，例如300505'),
-      period: z.enum([2,3,4,5,6,7,10,11,20,21,30]).default(10),
+      period: z.number().int().refine((n) => [2,3,4,5,6,7,10,11,20,21,30].includes(n), '不支持该K线周期').default(10),
       count: z.number().int().min(1).max(200).default(60)
     }), async ({ code,period,count }: any) => ({
       source: 'gdd', code,period, data: await fetchGddKline(code,period,count)
