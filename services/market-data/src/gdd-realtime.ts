@@ -30,9 +30,15 @@ export function parseGddWsMessage(raw: string): { reqtype:number; rows: Array<{ 
   const rows: Array<{code:string;market:number;type:PushType;payload:unknown}>=[];
   for(const item of values.slice(0,200)){
     if(!item || typeof item!=='object')continue;
-    const code=String(item.code??item.Code??'');
-    const market=Number(item.market??item.marketId??item.Market??-1);
-    if(!/^\d{6}$/.test(code) || !Number.isFinite(market))continue;
+    const code=String(item.code??item.Code??item.symbol??'');
+    if(!/^\d{6}$/.test(code))continue;
+    const rawMarket=item.market??item.marketId??item.Market;
+    // 若WS推送没有 market 字段，但证券代码明确，可用已验证的股票市场映射；
+    // 不允许猜测缺少证券代码的行情属于哪只股票。
+    let market:number;
+    try { market=rawMarket===undefined?gddMarketCode(code):Number(rawMarket); }
+    catch {continue;}
+    if(!Number.isFinite(market))continue;
     rows.push({code,market,type:reqtype as PushType,payload:item});
   }
   return {reqtype,rows};
