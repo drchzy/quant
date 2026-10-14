@@ -1,0 +1,45 @@
+name: Probe GDD MCP Endpoint
+on:
+  push:
+    branches:
+      - test/gdd-mcp-connectivity-20261014
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: DNS check
+        run: |
+          getent ahostsv4 ali.skter.cn | head -n 4 || true
+      - name: Unauthenticated MCP GET and JSON-RPC probes
+        shell: bash
+        run: |
+          set +e
+          URL='http://ali.skter.cn:59001/mcp'
+          for KIND in get initialize list; do
+            echo "======== PROBE ${KIND} ========"
+            HEADER="$(mktemp)"
+            BODY="$(mktemp)"
+            if [[ "$KIND" == 'get' ]]; then
+              curl -sS --connect-timeout 8 --max-time 15 --max-redirs 0 -D "$HEADER" -o "$BODY" \
+                -H 'Accept: application/json, text/event-stream' \
+                "$URL"
+            elif [[ "$KIND" == 'initialize' ]]; then
+              curl -sS --connect-timeout 8 --max-time 15 --max-redirs 0 -D "$HEADER" -o "$BODY" \
+                -X POST -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"external-connectivity-check","version":"1.0.0"}}}' "$URL"
+            else
+              curl -sS --connect-timeout 8 --max-time 15 --max-redirs 0 -D "$HEADER" -o "$BODY" \
+                -X POST -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "$URL"
+            fi
+            EC=$?
+            echo "curl_exit=$EC"
+            grep -iE '^(HTTP/|content-type:|www-authenticate:|server:|location:)' "$HEADER" | head -n 12
+            echo -n 'body_first_400_bytes='
+            head -c 400 "$BODY" | tr '\n' ' '
+            echo
+            rm -f "$HEADER" "$BODY"
+          done
