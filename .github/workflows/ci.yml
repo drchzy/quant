@@ -74,6 +74,7 @@ jobs:
           mkdir -p ci-web/data
           cp web/.env ci-web/.env
           echo 'BRIDGE_IMPORT_TOKEN="ci-bridge-secret-1234567890"' >> ci-web/.env
+          echo 'GDD_MCP_TOKEN="ci-test-quant-gdd-mcp-auth-token-1234567890"' >> ci-web/.env
           sed -i 's/SYNC_ENABLED="true"/SYNC_ENABLED="false"/' ci-web/.env
           sed -i 's/AUTO_SELECT_ENABLED="true"/AUTO_SELECT_ENABLED="false"/' ci-web/.env
           sed -i 's/TRADE_MONITOR_ENABLED="true"/TRADE_MONITOR_ENABLED="false"/' ci-web/.env
@@ -94,6 +95,18 @@ jobs:
               curl -fsS http://127.0.0.1:18088/
               curl -fsS http://127.0.0.1:18088/api/v1/select/config
               curl -fsS http://127.0.0.1:18088/api/v1/trading/today
+              # MCP 不需要真实GDD账号即可完成 initialize 和 tools/list。
+              test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18088/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')" = "401"
+              curl -fsS http://127.0.0.1:18088/mcp \
+                -H 'Authorization: Bearer ci-test-quant-gdd-mcp-auth-token-1234567890' \
+                -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' | grep -q 'quant-gdd-market'
+              curl -fsS http://127.0.0.1:18088/mcp \
+                -H 'Authorization: Bearer ci-test-quant-gdd-mcp-auth-token-1234567890' \
+                -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | grep -q 'gdd_get_kline'
               test -f ci-web/data/market.duckdb
               test -f ci-web/data/select.duckdb
               test -f ci-web/data/trade.duckdb
