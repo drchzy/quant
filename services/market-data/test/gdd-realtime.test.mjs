@@ -53,6 +53,9 @@ test('One backend WS socket multiplexes subscriptions and keeps latest pushed qu
     const current=feed.read('300505',1);
     assert.equal(current.connected,true);
     assert.equal(current.latest.payload.price,30.12);
+    assert.equal(feed.read('300505',4).subscribed,true);
+    assert.equal(feed.read('300505',4).latest?.payload.price,30.12);
+    assert.ok(feed.status().pushCounts[250]>=1);
     assert.ok(commands.some(m=>m.reqtype===200));
     assert.ok(commands.some(m=>m.data.some(sub=>sub.type===4)));
     assert.ok(commands.some(m=>m.reqtype===202));
