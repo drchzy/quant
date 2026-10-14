@@ -141,7 +141,8 @@ export class GddRealtimeFeed {
       });
       ws.on('error',(e)=>{this.lastError=e.message.slice(0,140);});
       ws.on('close',()=>{
-        if(this.ws===ws)this.ws=undefined;
+        if(this.ws!==ws)return; // 旧socket的close不能影响重连后的新socket
+        this.ws=undefined;
         this.clearHeartbeat();
         this.laterReconnect();
       });
@@ -164,10 +165,12 @@ export class GddRealtimeFeed {
     const existing=this.subscriptions.has(key);
     if(!existing && this.subscriptions.size>=MAX_SUBSCRIPTIONS)throw Error('GDD最多支持30项订阅');
     const sub:Subscription={market,code,type,language:0};
+    const previouslyOpen=this.ws?.readyState===WebSocket.OPEN;
     this.subscriptions.set(key,sub);
     try {
       await this.ensureConnection();
-      if(!existing)this.send(200,[sub]);
+      // 只有已建立的WS连接使用200追加。新连接内会用202一次性同步全部订阅。
+      if(!existing && previouslyOpen)this.send(200,[sub]);
     } catch(error) {
       if(!existing)this.subscriptions.delete(key);
       if(!this.subscriptions.size)this.stopConnection();
