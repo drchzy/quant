@@ -13,7 +13,8 @@ GDD_MCP_TOKEN="原MCP独立访问令牌"
 ```
 
 - Docker 重启后访问 `http://服务器IP:8088` 自动进入 `/login.html`，输入 Web 账号和密码登录；两个账户用途不同。**`WEB_PASSWORD` 为空或不足8位时默认拒绝网站访问**，不要误以为仍可免登录访问。
-- Web 登录由 `market-data` 服务端校验密码；Nginx 的 `auth_request` 对静态资源、`/api/`、策略、交易、外部行情导入统一实施会话检查。
+- Web 登录由 `market-data` 服务端校验密码；Nginx 的 `auth_request` 对静态资源、普通 `/api/`、策略、交易与同步接口实施会话检查。
+- **例外**：`POST /api/v1/bridge/import` 为无浏览器的外部采集程序保留原有 `BRIDGE_IMPORT_TOKEN` 校验，不要求Web Cookie；`GET /api/v1/bridge/status` 和桥接页面仍必须先网页登录。`/mcp` 继续使用独立 Bearer Token。
 - 12小时有效期的 HMAC 签名会话 Cookie：HttpOnly、SameSite=Strict。Cookie签名私钥首次自动存于 `web/data/.web-auth-secret`，重建容器不会丢失；更改 WEB_PASSWORD 即让旧Cookie失效。
 - 登录端点限制请求频率（Nginx每分钟8次，突发6次）；应用内部对连续失败登录也限制次数。退出登录会清除Cookie。
 - `/mcp` 保留独立Bearer令牌，不与网页登录共享Cookie；`/health` 可继续供Docker健康检测使用。
