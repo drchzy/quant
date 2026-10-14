@@ -8,6 +8,7 @@ import {
 import { registerRoutes } from './routes.js';
 import { getMarketDataSourceStatus } from './eastmoney.js';
 import { startScheduler } from './scheduler.js';
+import { serveGddMcp } from './gdd-mcp.js';
 
 const app = Fastify({
   logger: true
@@ -26,6 +27,25 @@ app.get('/health', async () => ({
   database: config.databasePath,
   time: new Date().toISOString()
 }));
+
+// MCP 使用同一个 market-data Node 进程，POST原始流在 onRequest 阶段交给SDK。
+// 认证默认关闭；/mcp 仅由 Nginx 8088 反向代理对外暴露。
+app.route({
+  method: ['GET', 'POST', 'DELETE'],
+  url: '/mcp',
+  onRequest: (request, reply) => {
+    reply.hijack();
+    void serveGddMcp(request.raw, reply.raw).catch(() => {
+      if (!reply.raw.headersSent) {
+        reply.raw.statusCode = 500;
+        reply.raw.end(JSON.stringify({error:'GDD MCP 内部错误'}));
+      } else if (!reply.raw.writableEnded) {
+        reply.raw.end();
+      }
+    });
+  },
+  handler: async () => {}
+});
 
 await initDatabase();
 await registerRoutes(app);
