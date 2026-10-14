@@ -1,6 +1,5 @@
 import { fetchGddKline, gddMarketCode } from './gdd.js';
 import { run } from './database.js';
-import { gddRealtime } from './gdd-realtime.js';
 
 export const GDD_BATCH_PERIODS = [2,3,4,5,6,7,10] as const;
 const MINUTES: Record<number,number> = {2:5,3:60,4:3,5:15,6:30,7:120};
@@ -35,22 +34,22 @@ export async function batchGddHistory(codes:string[],period=10,count=120,persist
           // upsert不触碰stock表的名称或额外估值信息。
           for(const row of rows){
             if(period===10){
-              await run(\`INSERT INTO daily_price
+              await run(`INSERT INTO daily_price
                 (code,trade_date,open,close,high,low,volume,amount,pct,change,amplitude,turnover,source,updated_at)
                 VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,'gdd',now())
                 ON CONFLICT(code,trade_date) DO UPDATE SET
                   open=excluded.open,close=excluded.close,high=excluded.high,low=excluded.low,
                   volume=excluded.volume,amount=excluded.amount,pct=NULL,change=NULL,
-                  amplitude=NULL,turnover=NULL,source='gdd',updated_at=now()\`,
+                  amplitude=NULL,turnover=NULL,source='gdd',updated_at=now()`,
                 [code,row.date.slice(0,10),row.open,row.close,row.high,row.low,row.volume,row.amount]);
             }else{
-              await run(\`INSERT INTO minute_price
+              await run(`INSERT INTO minute_price
                 (code,period,trade_time,open,close,high,low,volume,amount,pct,change,turnover,source,updated_at)
                 VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,'gdd',now())
                 ON CONFLICT(code,period,trade_time) DO UPDATE SET
                   open=excluded.open,close=excluded.close,high=excluded.high,low=excluded.low,
                   volume=excluded.volume,amount=excluded.amount,
-                  pct=NULL,change=NULL,turnover=NULL,source='gdd',updated_at=now()\`,
+                  pct=NULL,change=NULL,turnover=NULL,source='gdd',updated_at=now()`,
                 [code,MINUTES[period],row.date,row.open,row.close,row.high,row.low,row.volume,row.amount]);
             }
             persisted++;
