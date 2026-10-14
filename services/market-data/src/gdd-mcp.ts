@@ -211,7 +211,7 @@ function createGddMcpServer(): McpServer {
     try{
       countRequest();await ensureGdd();
       const subscribed=[];
-      for(const code of [...new Set(codes)])subscribed.push(await gddRealtime.subscribe(code,type));
+      for(const code of [...new Set<string>(codes as string[])])subscribed.push(await gddRealtime.subscribe(code,type));
       return result({subscribed,status:gddRealtime.status()});
     }catch(e){return {isError:true,content:[{type:'text' as const,text:e instanceof Error?e.message:'订阅失败'}]};}
   });
